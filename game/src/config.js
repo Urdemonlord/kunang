@@ -29,8 +29,9 @@ export const LANTERN = {
   coneTopY: 70,
   coneHalfTop: 52,
   coneHalfBottom: 170,
-  // How strongly the cone pulls a firefly sideways toward its centre.
-  pull: 46,
+  // How strongly the cone pulls a firefly sideways toward its centre:
+  // a velocity bias of pull/60 per second of offset (1.2/s at 72).
+  pull: 72,
   // How fast the lantern follows the mouse / keys.
   followSpeed: 900,
   keySpeed: 620,
@@ -44,6 +45,21 @@ export const PULSE = {
 };
 
 export const LIVES = 3;
+
+// Game-feel tuning (game-feel skill tiers). Small tier (save): particles
+// only. Medium tier (night clear): particles + flash. Large tier (lantern
+// hit): trauma 0.7, 0.08 s hit-stop, 20-40 particles, hit flash.
+export const FEEL = {
+  traumaHit: 0.7,
+  hitStopSec: 0.08,
+  hitStopSlow: 0.05,
+  shakeDecay: 1.2, // trauma lost per real second
+  maxOffsetX: 12,
+  maxOffsetY: 8,
+  particlesPerSave: 8,
+  particleCap: 120,
+  popSec: 0.18, // lantern squash-and-stretch pop after a save
+};
 
 // Combo tiers: consecutive saves 0-4 pay x1, 5-9 pay x2, 10+ pay x3.
 export function comboMultiplier(combo) {

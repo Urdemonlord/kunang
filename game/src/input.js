@@ -1,27 +1,53 @@
-// Mouse + keyboard input for Kunang.
-// The lantern follows the mouse along the bottom of the valley; arrow keys
-// or A/D move it too. Space or a click fires a pulse. P pauses, M mutes,
-// Enter starts, R restarts on the end screens. Edge-triggered actions are
-// queued and consumed once by the main loop, so a held key never double-fires.
+// Mouse + keyboard input for Kunang (input-systems skill).
+// Gameplay reads named ACTIONS, not raw keys: 'pulse', 'pause', 'mute',
+// 'start', 'restart' are edge-triggered and queued once per press, so a
+// held key never double-fires. Movement is the one held read: the lantern
+// follows the pointer, or the left/right move actions while they are held.
+// Pointer coordinates are normalised to logical 1280x720 space from the
+// canvas bounding rect (responsive-canvas-game), so HiDPI backing stores
+// and CSS scaling never shift the aim. Pointer events cover mouse, touch
+// and pen through the same path.
+
+import { W, H } from './config.js';
+
+// Discrete actions, bound by key (physical position on the keyboard is
+// what matters; these are single letters, so layout is not an issue).
+const KEY_ACTIONS = {
+  ' ': 'pulse',
+  p: 'pause',
+  m: 'mute',
+  enter: 'start',
+  r: 'restart',
+};
+
+// Held movement: -1 left, +1 right.
+const MOVE_KEYS = { arrowleft: -1, a: -1, arrowright: 1, d: 1 };
 
 export class Input {
   constructor(canvas) {
     this.canvas = canvas;
-    this.mouseX = 640;
-    this.mouseY = 360;
+    this.mouseX = W / 2;
+    this.mouseY = H / 2;
     this.mouseInside = false;
     this.keys = new Set();
     // One-shot action queue: 'pulse', 'pause', 'mute', 'start', 'restart'.
     this.actions = [];
-    this._onMouseMove = (e) => {
+    this._onPointerMove = (e) => {
       const r = this.canvas.getBoundingClientRect();
-      const scaleX = this.canvas.width / r.width;
-      this.mouseX = (e.clientX - r.left) * scaleX;
-      this.mouseY = (e.clientY - r.top) * (this.canvas.height / r.height);
+      this.mouseX = ((e.clientX - r.left) * W) / r.width;
+      this.mouseY = ((e.clientY - r.top) * H) / r.height;
       this.mouseInside = true;
     };
-    this._onMouseDown = () => {
+    this._onPointerDown = (e) => {
+      this._onPointerMove(e);
       this.actions.push('pulse');
+    };
+    this._onPointerLeave = () => {
+      // The pointer left the canvas: keys take over until it returns.
+      this.mouseInside = false;
+    };
+    this._onPointerCancel = () => {
+      this.mouseInside = false;
     };
     this._onKeyDown = (e) => {
       const k = e.key.toLowerCase();
@@ -30,11 +56,8 @@ export class Input {
       }
       if (e.repeat) return;
       this.keys.add(k);
-      if (k === ' ') this.actions.push('pulse');
-      if (k === 'p') this.actions.push('pause');
-      if (k === 'm') this.actions.push('mute');
-      if (k === 'enter') this.actions.push('start');
-      if (k === 'r') this.actions.push('restart');
+      const action = KEY_ACTIONS[k];
+      if (action) this.actions.push(action);
     };
     this._onKeyUp = (e) => {
       this.keys.delete(e.key.toLowerCase());
@@ -42,8 +65,10 @@ export class Input {
     this._onBlur = () => {
       this.keys.clear();
     };
-    canvas.addEventListener('mousemove', this._onMouseMove);
-    canvas.addEventListener('mousedown', this._onMouseDown);
+    canvas.addEventListener('pointermove', this._onPointerMove);
+    canvas.addEventListener('pointerdown', this._onPointerDown);
+    canvas.addEventListener('pointerleave', this._onPointerLeave);
+    canvas.addEventListener('pointercancel', this._onPointerCancel);
     window.addEventListener('keydown', this._onKeyDown);
     window.addEventListener('keyup', this._onKeyUp);
     window.addEventListener('blur', this._onBlur);
@@ -58,9 +83,8 @@ export class Input {
 
   moveDir() {
     let dir = 0;
-    if (this.keys.has('arrowleft') || this.keys.has('a')) dir -= 1;
-    if (this.keys.has('arrowright') || this.keys.has('d')) dir += 1;
-    return dir;
+    for (const k of this.keys) dir += MOVE_KEYS[k] || 0;
+    return Math.max(-1, Math.min(1, dir));
   }
 
   // Mouse steering wins when the pointer is over the canvas; otherwise keys.

@@ -3,7 +3,7 @@
 // holds the pulse charges, and flashes bright when a pulse fires. A bat
 // hit leaves it briefly invulnerable so one bat cannot take two lives.
 
-import { W, LANTERN, PULSE, LIVES } from './config.js';
+import { W, LANTERN, PULSE, LIVES, FEEL } from './config.js';
 import { scareBats } from './bats.js';
 
 export class Lantern {
@@ -14,7 +14,7 @@ export class Lantern {
     this.pulseTimer = 0; // seconds since the last recharge tick
     this.flash = 0; // seconds of pulse brightness remaining
     this.invuln = 0; // seconds of bat-hit protection remaining
-    this.shake = 0; // screen-shake seconds remaining
+    this.pop = 0; // squash-and-stretch pop seconds remaining after a save
   }
 
   reset() {
@@ -24,7 +24,7 @@ export class Lantern {
     this.pulseTimer = 0;
     this.flash = 0;
     this.invuln = 0;
-    this.shake = 0;
+    this.pop = 0;
   }
 
   update(world, dt) {
@@ -51,7 +51,16 @@ export class Lantern {
     }
     if (this.flash > 0) this.flash -= dt;
     if (this.invuln > 0) this.invuln -= dt;
-    if (this.shake > 0) this.shake -= dt;
+    if (this.pop > 0) this.pop -= dt;
+  }
+
+  // Squash-and-stretch scale for the pop: 1.15 at the moment of the save,
+  // settling back to 1 with a small overshoot (back ease-out).
+  popScale() {
+    if (this.pop <= 0) return 1;
+    const u = 1 - this.pop / FEEL.popSec; // 0 at pop start, 1 at rest
+    const backOut = 1 + 2.70158 * Math.pow(u - 1, 3) + 1.70158 * Math.pow(u - 1, 2);
+    return 1 + 0.15 * (1 - backOut);
   }
 
   // Fire a pulse: scare every bat away and brighten the cone. Returns

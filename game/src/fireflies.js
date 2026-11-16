@@ -57,7 +57,13 @@ export function updateFireflies(world, dt) {
     let vy = f.baseFall;
     if (fireflyInCone(f, lantern.x)) {
       // The light pulls the firefly toward the lantern and hurries it home.
-      vx += (lantern.x - f.x) * (LANTERN.pull / 60) * dt * 60 * 0.06;
+      // A velocity bias toward the cone centre, proportional to the offset
+      // (LANTERN.pull / 60 per second), frame-rate independent: the old
+      // term was throttled by a stray * 0.06 * dt, so the pull was ~2 px/s
+      // against a wobble of up to 36 px/s and a firefly dropped above the
+      // lantern could drift past it. With the real pull, the wobble's
+      // steady-state offset stays inside the 34 px save radius.
+      vx += (lantern.x - f.x) * (LANTERN.pull / 60);
       vy += 26;
     }
     f.x += vx * dt;

@@ -13,11 +13,11 @@ const HUD_FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';
 
 export function drawWorld(ctx, world) {
   ctx.save();
-  // Screen shake after a bat hit: a small random offset that dies fast.
-  if (world.lantern.shake > 0) {
-    const s = world.lantern.shake * 7;
-    ctx.translate((Math.random() - 0.5) * s, (Math.random() - 0.5) * s);
-  }
+  // Trauma-based screen shake (game-feel): shake = trauma^2, summed
+  // sines, decays in real time. Snaps to (0, 0) at rest — no per-frame
+  // random buzz, and the camera offset never touches the simulation.
+  const sh = world.feel.shakeOffset();
+  if (sh.x !== 0 || sh.y !== 0) ctx.translate(sh.x, sh.y);
   drawSky(ctx, world);
   drawStars(ctx, world);
   drawMoon(ctx, world);
@@ -27,11 +27,59 @@ export function drawWorld(ctx, world) {
   drawFireflies(ctx, world);
   drawBats(ctx, world);
   drawLantern(ctx, world);
+  drawParticles(ctx, world);
+  drawPopups(ctx, world);
   drawFog(ctx, world);
   drawVignette(ctx);
+  drawHitFlash(ctx, world);
   ctx.restore();
   drawHud(ctx, world);
   drawOverlay(ctx, world);
+}
+
+// Save-burst particles: small amber sparks that arc and fade.
+function drawParticles(ctx, world) {
+  if (world.feel.particles.length === 0) return;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (const p of world.feel.particles) {
+    const a = 1 - p.life / p.maxLife;
+    ctx.fillStyle = p.color === '#d8ff7a'
+      ? `rgba(216, 255, 122, ${0.85 * a})`
+      : p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size * a + 0.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+// Combo popups: "+10" rising and fading above the saved firefly.
+function drawPopups(ctx, world) {
+  if (world.feel.popups.length === 0) return;
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `700 22px ${HUD_FONT}`;
+  for (const p of world.feel.popups) {
+    const t = p.life / p.maxLife;
+    const y = p.y - t * 40;
+    ctx.globalAlpha = t < 0.6 ? 1 : 1 - (t - 0.6) / 0.4;
+    ctx.fillStyle = COLORS.amberSoft;
+    ctx.fillText(p.text, p.x, y);
+  }
+  ctx.restore();
+}
+
+// One brief red edge flash after a lantern hit. A single event, far
+// under the three-flashes-per-second photosensitivity limit.
+function drawHitFlash(ctx, world) {
+  if (world.feel.hitFlash <= 0) return;
+  const g = ctx.createRadialGradient(W / 2, H / 2, H * 0.42, W / 2, H / 2, H * 0.95);
+  g.addColorStop(0, 'rgba(255, 77, 77, 0)');
+  g.addColorStop(1, `rgba(255, 77, 77, ${0.28 * world.feel.hitFlash})`);
+  ctx.fillStyle = g;
+  ctx.fillRect(-20, -20, W + 40, H + 40);
 }
 
 function drawSky(ctx, world) {
@@ -257,33 +305,38 @@ function drawLantern(ctx, world) {
   const blink = l.invuln > 0 && Math.floor(world.time * 10) % 2 === 0;
   ctx.save();
   if (blink) ctx.globalAlpha = 0.35;
+  // Squash-and-stretch pop after a save: scale around the lantern's
+  // centre, so the pop never moves the hitbox or the light cone.
+  ctx.translate(lx, ly);
+  const s = l.popScale();
+  if (s !== 1) ctx.scale(s, s);
   // Handle.
   ctx.strokeStyle = '#3a2c18';
   ctx.lineWidth = 4;
   ctx.beginPath();
-  ctx.arc(lx, ly - 34, 14, Math.PI, 0);
+  ctx.arc(0, -34, 14, Math.PI, 0);
   ctx.stroke();
   // Body: warm glass with a dark iron frame.
-  const glass = ctx.createLinearGradient(lx - 20, ly - 28, lx + 20, ly + 22);
+  const glass = ctx.createLinearGradient(-20, -28, 20, 22);
   glass.addColorStop(0, '#ffd98a');
   glass.addColorStop(1, '#ff9e2c');
   ctx.fillStyle = glass;
-  roundRect(ctx, lx - 20, ly - 28, 40, 52, 8);
+  roundRect(ctx, -20, -28, 40, 52, 8);
   ctx.fill();
   ctx.strokeStyle = '#2c2113';
   ctx.lineWidth = 3;
-  roundRect(ctx, lx - 20, ly - 28, 40, 52, 8);
+  roundRect(ctx, -20, -28, 40, 52, 8);
   ctx.stroke();
   // Frame bars and caps.
   ctx.fillStyle = '#2c2113';
-  ctx.fillRect(lx - 22, ly - 30, 44, 6);
-  ctx.fillRect(lx - 22, ly + 20, 44, 6);
-  ctx.fillRect(lx - 2, ly - 28, 4, 50);
+  ctx.fillRect(-22, -30, 44, 6);
+  ctx.fillRect(-22, 20, 44, 6);
+  ctx.fillRect(-2, -28, 4, 50);
   // Flame, flickering.
   const fl = 1 + Math.sin(world.time * 9) * 0.12;
   ctx.fillStyle = '#fff3c4';
   ctx.beginPath();
-  ctx.ellipse(lx, ly + 2, 6 * fl, 11 * fl, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, 2, 6 * fl, 11 * fl, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 }
@@ -320,6 +373,9 @@ function drawVignette(ctx) {
 
 // --- HUD -----------------------------------------------------------------
 
+// HUD: anchored to the corners on a 4px grid (unslop spacing pass),
+// one accent (amber) for the number that matters, quiet chrome otherwise.
+// Numbers sit in one right-aligned column; shortcuts are keycaps.
 function drawHud(ctx, world) {
   if (world.state === 'title') return;
   ctx.save();
@@ -328,7 +384,7 @@ function drawHud(ctx, world) {
   ctx.fillStyle = COLORS.hud;
   ctx.font = `700 30px ${HUD_FONT}`;
   ctx.textAlign = 'left';
-  ctx.fillText(`Skor ${world.score}`, 24, 18);
+  ctx.fillText(`Skor ${world.score}`, 24, 20);
   if (world.combo >= 2) {
     ctx.fillStyle = COLORS.amber;
     ctx.font = `700 20px ${HUD_FONT}`;
@@ -341,20 +397,20 @@ function drawHud(ctx, world) {
   ctx.fillText(`Malam ${world.night} / 5`, W / 2, 20);
   const prog = world.nightDuration > 0 ? 1 - world.nightTime / world.nightDuration : 0;
   ctx.fillStyle = 'rgba(245, 236, 215, 0.25)';
-  ctx.fillRect(W / 2 - 90, 52, 180, 5);
+  ctx.fillRect(W / 2 - 90, 52, 180, 4);
   ctx.fillStyle = COLORS.amber;
-  ctx.fillRect(W / 2 - 90, 52, 180 * prog, 5);
+  ctx.fillRect(W / 2 - 90, 52, 180 * prog, 4);
   // Lives (little lanterns) and pulse charges, top right.
   ctx.textAlign = 'right';
   for (let i = 0; i < 3; i++) {
-    drawMiniLantern(ctx, W - 30 - i * 34, 34, i < world.lantern.lives);
+    drawMiniLantern(ctx, W - 32 - i * 32, 32, i < world.lantern.lives);
   }
   ctx.fillStyle = COLORS.hud;
   ctx.font = `700 18px ${HUD_FONT}`;
-  ctx.fillText(`Kunang diselamatkan ${world.saved}`, W - 24, 56);
+  ctx.fillText(`Diselamatkan ${world.saved}`, W - 24, 56);
   // Pulse charges as glowing dots under the lives.
   for (let i = 0; i < PULSE.max; i++) {
-    const cx = W - 32 - i * 26;
+    const cx = W - 32 - i * 28;
     const cy = 96;
     ctx.beginPath();
     ctx.arc(cx, cy, 8, 0, Math.PI * 2);
@@ -371,13 +427,42 @@ function drawHud(ctx, world) {
       ctx.stroke();
     }
   }
+  // Pulse hint: a keycap, then the word. Right-aligned as one group.
+  ctx.textBaseline = 'middle';
+  const hint = 'kilau';
   ctx.font = `400 13px ${HUD_FONT}`;
+  const hintW = ctx.measureText(hint).width;
+  drawKeycap(ctx, W - 24 - hintW - 8, 120, 'Spasi', 'right');
   ctx.fillStyle = COLORS.hudDim;
-  ctx.fillText('Spasi: kilau', W - 24, 112);
+  ctx.textAlign = 'right';
+  ctx.fillText(hint, W - 24, 120);
   // Mute state, bottom right, quiet and small.
+  ctx.textBaseline = 'top';
   ctx.font = `400 13px ${HUD_FONT}`;
-  ctx.fillText(world.audio.muted ? 'Suara: mati (M)' : 'Suara: hidup (M)', W - 24, H - 26);
+  ctx.fillText(world.audio.muted ? 'Suara: mati (M)' : 'Suara: hidup (M)', W - 24, H - 28);
   ctx.restore();
+}
+
+// A small keycap chip for a keyboard shortcut (unslop details pass).
+// align 'right' puts the cap's right edge at x; returns the cap width.
+function drawKeycap(ctx, x, y, label, align) {
+  ctx.save();
+  ctx.font = `700 13px ${HUD_FONT}`;
+  const w = Math.ceil(ctx.measureText(label).width) + 16;
+  const h = 24;
+  const rx = align === 'right' ? x - w : x;
+  ctx.fillStyle = 'rgba(245, 236, 215, 0.12)';
+  ctx.strokeStyle = 'rgba(245, 236, 215, 0.35)';
+  ctx.lineWidth = 1;
+  roundRect(ctx, rx, y - h / 2, w, h, 6);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = COLORS.hud;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, rx + w / 2, y + 1);
+  ctx.restore();
+  return w;
 }
 
 function drawMiniLantern(ctx, x, y, lit) {
@@ -406,27 +491,36 @@ function scrim(ctx, alpha) {
   ctx.fillRect(0, 0, W, H);
 }
 
+// Title (unslop direction: still, watchful, warm; the lantern glow and
+// the fireflies are the only bright things). No tracked-out eyebrow, no
+// em dashes: the wordmark is the title. Shortcuts are keycaps, on the
+// 4px grid, one primary action.
 function drawTitle(ctx, world) {
   scrim(ctx, 0.45);
   ctx.save();
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillStyle = COLORS.amberSoft;
-  ctx.font = `400 26px ${TITLE_FONT}`;
-  ctx.fillText('— K U N A N G —', W / 2, 158);
   ctx.fillStyle = COLORS.hud;
   ctx.font = `700 110px ${TITLE_FONT}`;
   ctx.fillText('Kunang', W / 2, 248);
   ctx.fillStyle = COLORS.amber;
   ctx.font = `italic 400 30px ${TITLE_FONT}`;
-  ctx.fillText('Penjaga Lentera', W / 2, 322);
+  ctx.fillText('Penjaga Lentera', W / 2, 320);
   ctx.fillStyle = COLORS.hud;
   ctx.font = `400 20px ${HUD_FONT}`;
   ctx.fillText('Lima malam. Satu lentera terakhir. Bawa kunang-kunang pulang,', W / 2, 388);
   ctx.fillText('jangan biarkan kelelawar memadamkan cahayamu.', W / 2, 416);
-  ctx.fillStyle = COLORS.hudDim;
-  ctx.font = `400 17px ${HUD_FONT}`;
-  ctx.fillText('Gerakkan lentera dengan mouse atau ← →  •  Spasi / klik: kilau pengusir kelelawar  •  P: jeda  •  M: suara', W / 2, 478);
+  // Controls as keycap rows, centred.
+  drawControlRow(ctx, 472, `400 17px ${HUD_FONT}`, [
+    { cap: '←' }, { cap: '→' }, { text: 'gerakkan lentera' },
+    { gap: 32 },
+    { cap: 'Spasi' }, { text: 'kilau pengusir kelelawar' },
+  ]);
+  drawControlRow(ctx, 508, `400 17px ${HUD_FONT}`, [
+    { cap: 'P' }, { text: 'jeda' },
+    { gap: 32 },
+    { cap: 'M' }, { text: 'suara' },
+  ]);
   // Breathing start prompt.
   const pulse = 0.65 + 0.35 * Math.sin(world.time * 2.4);
   ctx.globalAlpha = pulse;
@@ -442,6 +536,47 @@ function drawTitle(ctx, world) {
   ctx.restore();
 }
 
+// A centred row mixing keycap chips and plain labels. Segments:
+// { cap: 'P' } draws a keycap, { text: 'jeda' } draws a label,
+// { gap: 32 } adds space. All on the 4px grid.
+function drawControlRow(ctx, y, font, segments) {
+  ctx.save();
+  ctx.textBaseline = 'middle';
+  let total = 0;
+  for (const s of segments) {
+    if (s.gap) total += s.gap;
+    else if (s.cap) total += keycapWidth(ctx, s.cap) + 8;
+    else if (s.text) {
+      ctx.font = font;
+      total += Math.ceil(ctx.measureText(s.text).width) + 8;
+    }
+  }
+  total -= 8; // no trailing gap after the last segment
+  let x = Math.round((W - total) / 2);
+  for (const s of segments) {
+    if (s.gap) { x += s.gap; continue; }
+    if (s.cap) {
+      const w = drawKeycap(ctx, x, y, s.cap, 'left');
+      x += w + 8;
+      continue;
+    }
+    ctx.font = font;
+    ctx.fillStyle = COLORS.hudDim;
+    ctx.textAlign = 'left';
+    ctx.fillText(s.text, x, y);
+    x += Math.ceil(ctx.measureText(s.text).width) + 8;
+  }
+  ctx.restore();
+}
+
+function keycapWidth(ctx, label) {
+  ctx.save();
+  ctx.font = `700 13px ${HUD_FONT}`;
+  const w = Math.ceil(ctx.measureText(label).width) + 16;
+  ctx.restore();
+  return w;
+}
+
 function drawPause(ctx, world) {
   scrim(ctx, 0.55);
   ctx.save();
@@ -449,27 +584,36 @@ function drawPause(ctx, world) {
   ctx.textBaseline = 'middle';
   ctx.fillStyle = COLORS.hud;
   ctx.font = `700 64px ${TITLE_FONT}`;
-  ctx.fillText('Jeda', W / 2, H / 2 - 30);
-  ctx.fillStyle = COLORS.hudDim;
-  ctx.font = `400 20px ${HUD_FONT}`;
-  ctx.fillText('Tekan P untuk melanjutkan', W / 2, H / 2 + 30);
+  ctx.fillText('Jeda', W / 2, H / 2 - 32);
+  drawControlRow(ctx, H / 2 + 32, `400 20px ${HUD_FONT}`, [
+    { text: 'Tekan' }, { cap: 'P' }, { text: 'untuk melanjutkan' },
+  ]);
   ctx.restore();
 }
 
+// Night-clear banner: rises 16px and fades in over 0.35 s (ease-out),
+// fades out over the last 0.4 s. One entrance, one easing curve.
 function drawNightClear(ctx, world) {
   scrim(ctx, 0.35);
+  const total = 2.8;
+  const elapsed = total - world.bannerTimer;
+  const enter = Math.min(1, elapsed / 0.35);
+  const exit = Math.min(1, Math.max(0, world.bannerTimer / 0.4));
+  const alpha = Math.min(enter, exit);
+  const rise = Math.pow(1 - enter, 3) * 16; // ease-out cubic: 16px -> 0
   ctx.save();
+  ctx.globalAlpha = alpha;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = COLORS.amberSoft;
   ctx.font = `700 72px ${TITLE_FONT}`;
-  ctx.fillText(`Malam ${world.night} Terlewati`, W / 2, H / 2 - 50);
+  ctx.fillText(`Malam ${world.night} terlewati`, W / 2, H / 2 - 48 + rise);
   ctx.fillStyle = COLORS.hud;
   ctx.font = `400 24px ${HUD_FONT}`;
-  ctx.fillText(`Skor ${world.score}  •  ${world.saved} kunang diselamatkan`, W / 2, H / 2 + 16);
+  ctx.fillText(`Skor ${world.score}  •  ${world.saved} kunang diselamatkan`, W / 2, H / 2 + 16 + rise);
   ctx.fillStyle = COLORS.hudDim;
   ctx.font = `400 19px ${HUD_FONT}`;
-  ctx.fillText(world.night < 5 ? 'Kabut menebal. Kelelawar makin berani.' : '', W / 2, H / 2 + 56);
+  ctx.fillText(world.night < 5 ? 'Kabut menebal. Kelelawar makin berani.' : '', W / 2, H / 2 + 56 + rise);
   ctx.restore();
 }
 
@@ -480,11 +624,11 @@ function drawDawn(ctx, world) {
   ctx.textBaseline = 'middle';
   ctx.fillStyle = '#fff3c4';
   ctx.font = `700 84px ${TITLE_FONT}`;
-  ctx.fillText('FAJAR TIBA', W / 2, 210);
+  ctx.fillText('Fajar tiba', W / 2, 208);
   ctx.fillStyle = COLORS.hud;
   ctx.font = `italic 400 26px ${TITLE_FONT}`;
-  ctx.fillText('Lima malam kau jaga cahayanya. Lembah pun terang kembali.', W / 2, 282);
-  drawStats(ctx, world, 350);
+  ctx.fillText('Lima malam kau jaga cahayanya. Lembah pun terang kembali.', W / 2, 280);
+  drawStats(ctx, world, 352);
   ctx.fillStyle = COLORS.amber;
   ctx.font = `700 26px ${HUD_FONT}`;
   const pulse = 0.65 + 0.35 * Math.sin(world.time * 2.4);
@@ -505,7 +649,7 @@ function drawGameOver(ctx, world) {
   ctx.fillStyle = COLORS.hud;
   ctx.font = `italic 400 24px ${TITLE_FONT}`;
   ctx.fillText('Malam menelan cahaya terakhir lembah itu.', W / 2, 268);
-  drawStats(ctx, world, 330);
+  drawStats(ctx, world, 332);
   ctx.fillStyle = COLORS.amber;
   ctx.font = `700 26px ${HUD_FONT}`;
   const pulse = 0.65 + 0.35 * Math.sin(world.time * 2.4);
@@ -521,18 +665,18 @@ function drawStats(ctx, world, y) {
   ctx.textBaseline = 'middle';
   ctx.fillStyle = COLORS.hud;
   ctx.font = `700 30px ${HUD_FONT}`;
-  ctx.fillText(`Skor akhir  ${world.score}`, W / 2, y);
+  ctx.fillText(`Skor akhir ${world.score}`, W / 2, y);
   ctx.font = `400 21px ${HUD_FONT}`;
   ctx.fillStyle = COLORS.hudDim;
   ctx.fillText(
     `Kunang diselamatkan ${world.saved}   •   Kombo terbaik x${world.bestCombo}   •   Malam ${world.night} / 5`,
     W / 2,
-    y + 46,
+    y + 44,
   );
   if (world.score > 0 && world.score >= world.bestScore) {
     ctx.fillStyle = COLORS.amber;
     ctx.font = `700 20px ${HUD_FONT}`;
-    ctx.fillText('★ Skor terbaik baru ★', W / 2, y + 92);
+    ctx.fillText('Skor terbaik baru', W / 2, y + 92);
   }
   ctx.restore();
 }

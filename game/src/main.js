@@ -5,10 +5,11 @@
 // screenshots. Scoring, nights, lives and pulses all live here; the
 // entities, the lantern, the sound and the drawing live in their own files.
 
-import { W, H, NIGHTS, LANTERN, PULSE, LIVES, comboMultiplier, mulberry32 } from './config.js';
+import { W, H, NIGHTS, LANTERN, PULSE, LIVES, FEEL, comboMultiplier, mulberry32 } from './config.js';
 import { Input } from './input.js';
 import { AudioSys } from './audio.js';
 import { Lantern } from './lantern.js';
+import { Feel } from './feel.js';
 import { spawnFirefly, updateFireflies } from './fireflies.js';
 import { spawnBat, updateBats } from './bats.js';
 import { drawWorld } from './render.js';
@@ -16,6 +17,25 @@ import { applyShot } from './shots.js';
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
+
+// HiDPI shell (responsive-canvas-game): the canvas draws in logical
+// 1280x720 coordinates, but the backing store is the CSS size times the
+// device pixel ratio (capped at 2), so text and glow stay crisp on retina
+// displays. At DPR 1 (headless screenshots) the backing store is exactly
+// 1280x720, so the deterministic ?shot= frames are unchanged.
+let dpr = 1;
+function fitCanvas() {
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const rect = canvas.getBoundingClientRect();
+  const w = Math.max(320, Math.round(rect.width * dpr));
+  const h = Math.max(180, Math.round(rect.height * dpr));
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
+}
+window.addEventListener('resize', fitCanvas);
+window.addEventListener('orientationchange', fitCanvas);
 
 function createWorld() {
   const rng = mulberry32(20261117);
@@ -64,6 +84,8 @@ function createWorld() {
     spawnBatAcc: 0,
     bannerTimer: 0,
     ambientAcc: 0,
+    feel: new Feel(),
+    pulseBufferedAt: -1, // game time of a pulse press that found no charge
   };
 }
 
@@ -108,6 +130,8 @@ function startGame() {
   world.spawnFireflyAcc = 0;
   world.spawnBatAcc = 0;
   world.lantern.reset();
+  world.feel = new Feel();
+  world.pulseBufferedAt = -1;
   world.rng = mulberry32((Math.random() * 0x7fffffff) | 0);
   world.state = 'play';
   world.audio.ensure();
@@ -170,21 +194,40 @@ function updatePlay(world, dt) {
     world.bats.push(spawnBat(world.rng, cfg.batSpeed));
   }
   world.lantern.update(world, dt);
+  // A pulse pressed just before a charge landed fires now (input-systems
+  // action buffer: 0.15 s, game time, consumed once).
+  if (world.pulseBufferedAt >= 0 && world.time - world.pulseBufferedAt <= 0.15) {
+    if (world.lantern.pulse(world)) {
+      world.audio.whoosh();
+      world.pulseBufferedAt = -1;
+    }
+  } else if (world.pulseBufferedAt >= 0) {
+    world.pulseBufferedAt = -1; // expired
+  }
   const { saved, lost } = updateFireflies(world, dt);
   for (const f of saved) {
     world.combo += 1;
     world.bestCombo = Math.max(world.bestCombo, world.combo);
-    world.score += 10 * comboMultiplier(world.combo);
+    const gain = 10 * comboMultiplier(world.combo);
+    world.score += gain;
     world.saved += 1;
     world.audio.chime(world.combo);
+    // Small-tier feedback bundle: burst + popup + lantern pop.
+    world.feel.burst(f.x, f.y, FEEL.particlesPerSave, '#d8ff7a');
+    world.feel.popup(f.x, f.y - 12, `+${gain}`);
+    world.lantern.pop = FEEL.popSec;
   }
   if (lost.length > 0) world.combo = 0;
   const { eaten, hitLantern } = updateBats(world, dt);
   if (eaten.length > 0) world.combo = 0;
   for (let i = 0; i < hitLantern; i++) {
     world.lantern.lives -= 1;
-    world.lantern.shake = 0.5;
     world.combo = 0;
+    world.pulseBufferedAt = -1;
+    // Large-tier feedback bundle: trauma shake + hit-stop + edge flash.
+    world.feel.addTrauma(FEEL.traumaHit);
+    world.feel.hitStopFor(FEEL.hitStopSec);
+    world.feel.hitFlash = 1;
     world.audio.thud();
     if (world.lantern.lives <= 0) {
       gameOver();
@@ -196,6 +239,8 @@ function updatePlay(world, dt) {
 
 function update(world, dt) {
   world.time += dt;
+  if (world.state === 'pause') return; // frozen, feel included
+  world.feel.updateGame(dt);
   if (world.state === 'title') {
     driftAmbient(world, dt, 0.5);
     return;
@@ -210,7 +255,6 @@ function update(world, dt) {
     if (world.bannerTimer <= 0) beginNight(world.night + 1);
     return;
   }
-  if (world.state === 'pause') return; // frozen
   // dawn + gameover: the sky keeps breathing behind the end screen.
   driftAmbient(world, dt, 0.4);
 }
@@ -233,7 +277,13 @@ function handleActions(world) {
         startGame();
       } else if (world.state === 'play') {
         world.audio.ensure();
-        if (world.lantern.pulse(world)) world.audio.whoosh();
+        if (world.lantern.pulse(world)) {
+          world.audio.whoosh();
+        } else if (world.lantern.pulseCharges < PULSE.max) {
+          // No charge yet: remember the press briefly, so it fires the
+          // moment the next charge lands (0.15 s window, game time).
+          world.pulseBufferedAt = world.time;
+        }
       } else if (world.state === 'dawn' || world.state === 'gameover') {
         startGame();
       }
@@ -255,20 +305,37 @@ function handleActions(world) {
 
 // --- boot -----------------------------------------------------------------
 
+// The context transform maps the logical 1280x720 scene onto the actual
+// backing store: backing pixels per logical pixel. On a 1280x720 desktop
+// at DPR 1 that is 1; on a narrow phone (390 CSS px wide, DPR 2) it is
+// 780/1280, so the whole scene fits instead of clipping to the top-left.
+function drawScale() {
+  return canvas.width / W;
+}
+
 const params = new URLSearchParams(window.location.search);
 const shot = params.get('shot');
+fitCanvas();
 if (shot) {
   // Screenshot mode: one deterministic frame, no loop, no sound.
   const seed = Number(params.get('seed') || 1);
   applyShot(world, shot, seed);
+  const s = drawScale();
+  ctx.setTransform(s, 0, 0, s, 0, 0);
   drawWorld(ctx, world);
 } else {
   let last = performance.now();
   function frame(now) {
-    const dt = Math.min((now - last) / 1000, 0.05);
+    // Real dt first: the feel layer (hit-stop timer, trauma decay) runs
+    // on real time, then the simulation runs on the scaled dt.
+    const realDt = Math.min((now - last) / 1000, 0.05);
     last = now;
+    world.feel.updateReal(realDt);
+    const dt = realDt * world.feel.timeScale;
     handleActions(world);
     update(world, dt);
+    const s = drawScale();
+    ctx.setTransform(s, 0, 0, s, 0, 0);
     drawWorld(ctx, world);
     requestAnimationFrame(frame);
   }
