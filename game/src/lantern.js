@@ -17,6 +17,7 @@ export class Lantern {
     this.flash = 0; // seconds of pulse brightness remaining
     this.invuln = 0; // seconds of bat-hit protection remaining
     this.pop = 0; // squash-and-stretch pop seconds remaining after a save
+    this.popAmp = 0.15; // pop size: 0.15 routine, bigger on combo milestones
   }
 
   reset() {
@@ -28,6 +29,7 @@ export class Lantern {
     this.flash = 0;
     this.invuln = 0;
     this.pop = 0;
+    this.popAmp = 0.15;
   }
 
   update(world, dt) {
@@ -55,16 +57,23 @@ export class Lantern {
     }
     if (this.flash > 0) this.flash -= dt;
     if (this.invuln > 0) this.invuln -= dt;
-    if (this.pop > 0) this.pop -= dt;
+    if (this.pop > 0) {
+      this.pop -= dt;
+      if (this.pop <= 0) {
+        this.pop = 0;
+        this.popAmp = 0.15; // back to the routine size; popScale is 1 at rest
+      }
+    }
   }
 
-  // Squash-and-stretch scale for the pop: 1.15 at the moment of the save,
-  // settling back to 1 with a small overshoot (back ease-out).
+  // Squash-and-stretch scale for the pop: 1 + popAmp at the moment of
+  // the save, settling back to exactly 1 with a small overshoot
+  // (back ease-out: the scale dips just under 1 mid-way, then lands on 1).
   popScale() {
     if (this.pop <= 0) return 1;
     const u = 1 - this.pop / FEEL.popSec; // 0 at pop start, 1 at rest
     const backOut = 1 + 2.70158 * Math.pow(u - 1, 3) + 1.70158 * Math.pow(u - 1, 2);
-    return 1 + 0.15 * (1 - backOut);
+    return 1 + this.popAmp * (1 - backOut);
   }
 
   // Fire a pulse: bats inside the pulse radius take a hit and the cone

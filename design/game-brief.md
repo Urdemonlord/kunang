@@ -37,3 +37,39 @@ Arcade malam kecil, "still, watchful, warm", satu aksen amber di atas indigo gel
 - Yang masih rusak: bulan sabit masih render seperti cakram gelap menimpa halo (sudah begitu sejak v2, bukan regresi; tidak disentuh). Sayap boss dari jauh terbaca sebagai satu bentuk lebar, urat sayap tidak kelihatan dari jauh. Kilau sekarang berbasis radius 720 px, jadi kelelawar di sudut langit paling jauh lolos dari kilau (sengaja, upgrade Kilau Luas menutup celah ini; malam 1 tidak terasa karena kelelawar jarang dan lambat).
 - Yang ditebak: campuran kelelawar per malam (angka dari rasa, belum playtest manusia); tarif kunang emas 1/12 dan bonus boss 500 belum diuji manusia; bot headless bukan pemain manusia.
 - Not yet played by a person.
+
+---
+
+# Kunang — Rame Pass (di atas spectacular)
+
+Premis (kata-kata Arya): "kayak kurang rame dan heboh kek game game top 1". Game top (Lanternkeep, 94%) layarnya padat: banyak musuh dan banyak sistem jalan bareng. Kunang masih tenang. Putaran ini menambah kepadatan dan spektakel, BUKAN sistem baru: layar lebih ramai dari malam 2, ada gelombang kelelawar, ada hujan kunang emas, kombo x5/x10 meledak, dan semua feedback lewat satu `feedback(tier, pos)` supaya tetap proporsional.
+
+Skill yang dipakai: `awesome-gamedev-agent-skills/skills/disciplines/game-feel` (tier + feedback tunggal + verifikasi headless), `.../disciplines/create-game-assets` (visual target yang sudah disetujui, keluarga visual yang sama, validasi di skala asli game), plus antislop-ui + design-taste-frontend + game-studio-workflow.
+
+## Design read
+
+Arcade malam kecil, "still, watchful, warm", satu aksen amber di atas indigo gelap. Rame di sini berarti padat dan hidup, bukan berisik: warna dan font tetap sama, banner gelombang/hujan pakai tipografi yang sama dengan banner boss.
+
+## Yang dibangun (urut)
+
+1. [x] Kepadatan: malam 2+ jauh lebih ramai (kunang ~3-4/dtk, kelelawar ~1.0-2.2/dtk di malam puncak) dengan cap (kunang 48, kelelawar 12) supaya tetap bisa dimainkan. Malam 1 TIDAK berubah. (unit 35/35 + live: malam 2 real-time 28-30 kunang hidup, cap tertahan; bat rate awal 0.7 terbukti terlalu rendah karena kelelawar cepat mati setelah makan, dinaikkan ke 1.0-2.2)
+2. [x] Gelombang kelelawar: mulai malam 2, banner peringatan dulu, lalu 5-8 kelelawar datang bareng. 1 gelombang di malam 2-3, 2 di malam 4-5. (live: banner muncul, 5+ kelelawar tiba sekaligus)
+3. [x] Hujan Kunang Emas: mulai malam 3, sekali per malam, 5 kunang emas sekaligus + banner kecil. Aturan emas tetap (jatuh 1.5x, skor 5x, kelelawar memburunya dulu). (live: banner + 4+ emas di layar)
+4. [x] Spektakel kombo lewat tier game-feel: satu `feedback(tier, pos)` untuk semua event. Kombo x5 = medium, x10 = large, save emas = large, boss kena kilau = large, kena kelelawar = large + flash merah. Save biasa tetap small. Hit-stop tidak pernah ditumpuk; flash amber dibatasi 3/detik. Pop lentera pakai back ease-out dan kembali tepat ke 1. (unit: double large 30ms -> timeScale kembali 1.0, trauma 0 dalam 1/decay, pop berakhir tepat 1; live: milestone x5/x10 menyala, save emas tetap 5x)
+5. [x] Toggle goyangan layar (G): 100% / 50% / 0%, tercantum di layar judul. (live: G bersiklus 1 -> 0.5 -> 0 -> 1)
+6. [x] Screenshot baru: 2-wave.jpg (momen gelombang yang padat) menggantikan 2-boss.jpg; 1-start, 3-upgrade, 4-end di-render ulang dari kode baru. Tepat 4, masing-masing <=256 KiB. (54 KB, 51 KB, 58 KB, 52 KB; deterministik: render 2x byte-identik; 2-boss.jpg lama pindah ke screenshots-old/)
+
+## Anti-pilar
+
+- Jangan ubah kontrol yang ada (panah/mouse, Spasi, P, M, Enter, R); G hanya menambah toggle.
+- Jangan buat malam 1 lebih susah; jangan ubah durasi malam.
+- Jangan tambah aset gambar (tetap canvas prosedural, nol aset AI).
+- Jangan ubah boss, upgrade, 3 jenis kelelawar, kunang emas, atau struktur 5 malam.
+- Jangan over-juice aksi rutin: save biasa tetap small tier, tanpa hit-stop dan tanpa flash.
+
+## Handover (diisi di akhir)
+
+- Yang lolos: semua 6 item rame pass; unit baru 35/35 + unit lama 33/33; live 42/42 tanpa error konsol/page (semua ?shot= render, G bersiklus, malam 1 tetap tenang dan bot bertahan, gelombang + hujan menyala, milestone x5/x10 menyala, save emas tetap 5x, boss kalah -> fajar, game over); screenshot tepat 4 di bawah 58 KB dan deterministik; staging main.ts exit 0, dossier menyebut gelombang/hujan/kombo/feedback/shake.
+- Yang masih rusak: bulan sabit masih render seperti cakram gelap menimpa halo (sudah begitu sejak v2, bukan regresi; tidak disentuh). Satu kelelawar gelombang di screenshot 2-wave.jpg bertumpuk di atas bulan. Siluet jenis kelelawar beda dari dekat tapi kecil di layar; di ukuran contact sheet bedanya kebanyakan ukuran + kecepatan.
+- Yang ditebak: tarif spawn malam 2-5 (angka dari rasa, belum playtest manusia; bat rate sudah dinaikkan sekali setelah pengukuran live membuktikan 0.7/dtk terlalu sepi); aturan kombo hilang -1 per kunang jatuh (baru di putaran ini, supaya milestone tetap bisa dicapai di layar padat); campuran gelombang dan titik hujan (40-70% malam) belum diuji manusia; bot headless bukan pemain manusia.
+- Not yet played by a person.

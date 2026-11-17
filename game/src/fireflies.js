@@ -27,9 +27,10 @@ export class Firefly {
   }
 }
 
-export function spawnFirefly(rng, night = 1) {
-  // Golden fireflies only from night 2 on, about 1 in 12.
-  const golden = night >= 2 && rng() < GOLDEN.chance;
+export function spawnFirefly(rng, night = 1, forceGolden = false) {
+  // Golden fireflies only from night 2 on, about 1 in 12 — unless the
+  // golden shower forces them (night 3+ event, 5 at once).
+  const golden = forceGolden || (night >= 2 && rng() < GOLDEN.chance);
   return new Firefly(40 + rng() * (W - 80), -12, rng, golden);
 }
 

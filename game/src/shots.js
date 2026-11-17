@@ -1,14 +1,14 @@
 // Deterministic screenshot states for Kunang.
 // ?shot=start shows the title screen, ?shot=play a fixed mid-play scene,
-// ?shot=boss the night-5 boss fight, ?shot=upgrade the between-night
-// upgrade choice, ?shot=end the Dawn victory screen — all from a seeded
-// RNG, so the same query renders the same bytes on every run. The live
-// game never calls this; main.js calls it once when a ?shot= query is
-// present.
+// ?shot=boss the night-5 boss fight, ?shot=wave a dense night-4 wave
+// moment, ?shot=upgrade the between-night upgrade choice, ?shot=end the
+// Dawn victory screen — all from a seeded RNG, so the same query renders
+// the same bytes on every run. The live game never calls this; main.js
+// calls it once when a ?shot= query is present.
 
-import { W, H, NIGHTS, LANTERN, BOSS, mulberry32 } from './config.js';
+import { W, H, NIGHTS, LANTERN, BOSS, WAVES, mulberry32 } from './config.js';
 import { spawnFirefly, updateFireflies } from './fireflies.js';
-import { spawnBat, spawnBoss, updateBats } from './bats.js';
+import { spawnBat, spawnBoss, spawnWaveBats, updateBats } from './bats.js';
 import { rollChoices } from './upgrades.js';
 
 export function applyShot(world, name, seed) {
@@ -23,6 +23,8 @@ export function applyShot(world, name, seed) {
     buildPlayScene(world, rng);
   } else if (name === 'boss') {
     buildBossScene(world, rng);
+  } else if (name === 'wave') {
+    buildWaveScene(world, rng);
   } else if (name === 'upgrade') {
     buildUpgradeScene(world, rng);
   } else if (name === 'end') {
@@ -173,6 +175,82 @@ function buildBossScene(world, rng) {
   world.combo = 6;
   world.bestCombo = 9;
   world.saved = 61;
+  world.lantern.lives = 3;
+  world.lantern.pulseCharges = 2;
+  world.lantern.flash = 0.55;
+}
+
+// A dense night-4 wave moment (rame pass): a real simulated stretch to
+// the first wave, frozen just as the wave bats arrive under the warning
+// banner, the sky crowded with fireflies. The wave is placed by hand
+// (not by the live scheduler) so the frame is exact every run.
+function buildWaveScene(world, rng) {
+  world.state = 'play';
+  world.night = 4;
+  world.nightDuration = NIGHTS[3].duration;
+  world.nightFog = NIGHTS[3].fog;
+  world.score = 760;
+  world.combo = 8;
+  world.bestCombo = 10;
+  world.saved = 54;
+  world.lantern.lives = 3;
+  world.lantern.pulseCharges = 2;
+  world.lantern.flash = 0.55;
+  world.waveBanner = 2.0;
+  world.wavesFired = 1;
+  world.comboMilestone = 5;
+  const cfg = NIGHTS[3];
+  const waveAt = WAVES[4][0].at * cfg.duration;
+  let fireflyAcc = 0;
+  let batAcc = 0;
+  const dt = 1 / 60;
+  for (let step = 0; step < Math.round(waveAt * 60); step++) {
+    const t = step * dt;
+    world.time = t;
+    world.nightTime = t;
+    world.lantern.x = 640 + Math.sin(t * 0.45) * 280;
+    fireflyAcc += cfg.fireflyRate * dt;
+    while (fireflyAcc >= 1) {
+      fireflyAcc -= 1;
+      world.fireflies.push(spawnFirefly(rng, 4));
+    }
+    batAcc += cfg.batRate * dt;
+    while (batAcc >= 1) {
+      batAcc -= 1;
+      world.bats.push(spawnBat(rng, cfg.batSpeed, 4));
+    }
+    updateFireflies(world, dt);
+    updateBats(world, dt);
+  }
+  world.nightTime = waveAt;
+  // The wave itself: 7 bats, mixed types, arriving from both sides.
+  world.bats.push(...spawnWaveBats(rng, cfg.batSpeed, 4, WAVES[4][0].size));
+  // Guarantee the frame reads as crowded: at least 25 fireflies and
+  // 8 bats on screen.
+  while (world.fireflies.length < 25) {
+    const f = spawnFirefly(rng, 4);
+    f.y = 90 + rng() * 420;
+    f.x = 60 + rng() * (W - 120);
+    prefillTrail(f);
+    world.fireflies.push(f);
+  }
+  while (world.bats.length < 8) {
+    const b = spawnBat(rng, cfg.batSpeed, 4);
+    b.x = 300 + rng() * 680;
+    b.y = 150 + rng() * 160;
+    world.bats.push(b);
+  }
+  // Guarantee a golden firefly in frame for the risk/reward read.
+  const gold = spawnFirefly(rng, 4);
+  gold.golden = true;
+  gold.x = world.lantern.x - 90;
+  gold.y = 430;
+  prefillTrail(gold);
+  world.fireflies.push(gold);
+  world.score = 760;
+  world.combo = 8;
+  world.bestCombo = 10;
+  world.saved = 54;
   world.lantern.lives = 3;
   world.lantern.pulseCharges = 2;
   world.lantern.flash = 0.55;

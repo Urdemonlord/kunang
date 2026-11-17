@@ -74,6 +74,20 @@ export function spawnBat(rng, speed, night = 1) {
   return new Bat(x, y, speed, fromLeft ? 1 : -1, rng, type);
 }
 
+// A bat wave: `count` bats arriving together from alternating sides,
+// mixed types for the night, spread across the upper sky. Pure: returns
+// the bats, the caller pushes them into the world (and caps the total).
+export function spawnWaveBats(rng, speed, night, count) {
+  const bats = [];
+  for (let i = 0; i < count; i++) {
+    const b = spawnBat(rng, speed, night);
+    b.x = i % 2 === 0 ? -30 - rng() * 60 : W + 30 + rng() * 60;
+    b.y = 80 + rng() * 260;
+    bats.push(b);
+  }
+  return bats;
+}
+
 // The boss swoops in from the top centre of the sky.
 export function spawnBoss(rng) {
   const b = new Bat(W / 2, -60, BOSS.speed, 1, rng, 'boss');

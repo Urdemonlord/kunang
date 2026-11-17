@@ -6,13 +6,13 @@
 // Scoring, nights, lives and pulses all live here; the entities, the
 // lantern, the sound and the drawing live in their own files.
 
-import { W, H, NIGHTS, LANTERN, PULSE, LIVES, FEEL, BOSS, GOLDEN, comboMultiplier, mulberry32 } from './config.js';
+import { W, H, NIGHTS, LANTERN, PULSE, LIVES, FEEL, BOSS, GOLDEN, WAVES, SHOWER, FIREFLY_CAP, BAT_CAP, BAT_HARD_CAP, comboMultiplier, comboMilestone, mulberry32 } from './config.js';
 import { Input } from './input.js';
 import { AudioSys } from './audio.js';
 import { Lantern } from './lantern.js';
 import { Feel } from './feel.js';
 import { spawnFirefly, updateFireflies } from './fireflies.js';
-import { spawnBat, spawnBoss, updateBats } from './bats.js';
+import { spawnBat, spawnBoss, spawnWaveBats, updateBats } from './bats.js';
 import { drawWorld } from './render.js';
 import { applyShot } from './shots.js';
 import { freshUpgrades, rollChoices, applyUpgrade, effPulseMax } from './upgrades.js';
@@ -97,6 +97,16 @@ function createWorld() {
     boss: null,
     bossBanner: 0, // seconds the "Raja Kelelawar datang" banner stays up
     bossDefeatTimer: 0, // seconds of celebration before the night ends
+    // Rame pass: waves, golden shower, combo milestones, shake toggle.
+    comboMilestone: 0, // highest combo milestone fired so far (0/5/10)
+    wavesFired: 0, // waves already triggered this night
+    wavePending: null, // { count, timer } between warning and arrival
+    waveBanner: 0, // seconds the "Gelombang kelelawar!" banner stays up
+    showerAt: -1, // night-time seconds when the golden shower fires (-1: none)
+    showerFired: false,
+    showerBanner: 0, // seconds the "Hujan Kunang Emas!" banner stays up
+    shakeNote: 0, // seconds the shake-strength note stays on screen
+    shakeLabel: '',
   };
 }
 
@@ -152,6 +162,12 @@ function startGame() {
   world.boss = null;
   world.bossBanner = 0;
   world.bossDefeatTimer = 0;
+  world.comboMilestone = 0;
+  world.wavesFired = 0;
+  world.wavePending = null;
+  world.waveBanner = 0;
+  world.showerFired = false;
+  world.showerBanner = 0;
   world.state = 'play';
   world.audio.ensure();
 }
@@ -168,6 +184,16 @@ function beginNight(n) {
   world.boss = null;
   world.bossBanner = 0;
   world.bossDefeatTimer = 0;
+  world.wavesFired = 0;
+  world.wavePending = null;
+  world.waveBanner = 0;
+  // The golden shower: once per night from night 3, at a random point
+  // 40-70% into the night (world rng, so ?shot= states stay stable).
+  world.showerFired = false;
+  world.showerBanner = 0;
+  world.showerAt = n >= SHOWER.minNight
+    ? NIGHTS[n - 1].duration * (0.4 + world.rng() * 0.3)
+    : -1;
   world.state = 'play';
 }
 
@@ -203,24 +229,27 @@ function pickUpgrade(world, index) {
   world.upgradeConfirm = 1.0;
 }
 
-// The spectacle for a pulse that hit the boss: a big shake, a longer
-// hit-stop and a burst where he hangs. A defeated boss pays the bonus,
-// bursts gold, and ends night 5 after a short celebration.
+// The spectacle for a pulse that hit the boss, all through the single
+// feedback(tier, pos) call: a large bundle where he hangs. A defeated
+// boss pays the bonus, bursts gold on top of the large tier, and ends
+// night 5 after a short celebration.
 function handlePulseResult(world, res) {
   if (!res) return;
   if (res.bossHit) {
-    world.feel.addTrauma(FEEL.traumaBossHit);
-    world.feel.hitStopFor(FEEL.hitStopBossSec);
-    world.feel.burst(res.bossX, res.bossY, FEEL.particlesBossHit, '#ff8a7a');
+    world.feel.feedback('large', res.bossX, res.bossY, { color: '#ff8a7a' });
     world.audio.thud();
   }
   if (res.bossDefeated) {
     world.score += BOSS.scoreBonus;
+    // Burst at the death point, popup above it.
+    world.feel.feedback('large', res.bossX, res.bossY - 40, {
+      color: GOLDEN.color,
+      popup: `Raja Kelelawar kalah! +${BOSS.scoreBonus}`,
+    });
+    // The defeat tops the large tier up: extra bursts and trauma 1.
     world.feel.burst(res.bossX, res.bossY, FEEL.particlesBossDefeat, GOLDEN.color);
     world.feel.burst(res.bossX, res.bossY, FEEL.particlesBossDefeat / 2, '#d8ff7a');
-    world.feel.popup(res.bossX, res.bossY - 40, `Raja Kelelawar kalah! +${BOSS.scoreBonus}`);
-    world.feel.addTrauma(1);
-    world.feel.hitStopFor(FEEL.hitStopBossSec);
+    world.feel.addTrauma(0.15);
     world.audio.nightClear();
     world.boss = null;
     world.bossDefeatTimer = 1.2;
@@ -257,6 +286,42 @@ function updatePlay(world, dt) {
     world.bossBanner = 2.5;
   }
   if (world.bossBanner > 0) world.bossBanner -= dt;
+  // Bat waves (rame pass): the schedule for this night fires a warning
+  // banner first, then the bats arrive together 0.9 s later.
+  const waveSched = WAVES[world.night] || [];
+  const nextWave = waveSched[world.wavesFired];
+  if (nextWave && !world.wavePending
+      && world.nightTime >= nextWave.at * world.nightDuration) {
+    world.wavePending = { count: nextWave.size, timer: 0.9 };
+    world.waveBanner = 2.2;
+    world.wavesFired += 1;
+  }
+  if (world.wavePending) {
+    world.wavePending.timer -= dt;
+    if (world.wavePending.timer <= 0) {
+      const room = Math.max(0, BAT_HARD_CAP - world.bats.length);
+      const n = Math.min(world.wavePending.count, room);
+      if (n > 0) {
+        world.bats.push(...spawnWaveBats(world.rng, cfg.batSpeed, world.night, n));
+        world.audio.whoosh();
+      }
+      world.wavePending = null;
+    }
+  }
+  if (world.waveBanner > 0) world.waveBanner -= dt;
+  // Golden shower (rame pass): once per night from night 3, a handful
+  // of golden fireflies arrive at once under a gold banner.
+  if (world.showerAt > 0 && !world.showerFired && world.nightTime >= world.showerAt) {
+    world.showerFired = true;
+    world.showerBanner = 2.2;
+    for (let i = 0; i < SHOWER.count; i++) {
+      const f = spawnFirefly(world.rng, world.night, true);
+      f.x = 120 + (W - 240) * (i / (SHOWER.count - 1));
+      world.fireflies.push(f);
+    }
+    world.audio.nightClear();
+  }
+  if (world.showerBanner > 0) world.showerBanner -= dt;
   // The boss is defeated: celebrate the burst for a moment, then the
   // night ends early. No new spawns during the celebration.
   if (world.bossDefeatTimer > 0) {
@@ -267,15 +332,21 @@ function updatePlay(world, dt) {
     if (world.bossDefeatTimer <= 0) endNight();
     return;
   }
-  world.spawnFireflyAcc += cfg.fireflyRate * dt;
-  while (world.spawnFireflyAcc >= 1) {
-    world.spawnFireflyAcc -= 1;
-    world.fireflies.push(spawnFirefly(world.rng, world.night));
+  // Spawn accumulators freeze at the density caps, so the screen stays
+  // busy but readable and the lantern can still keep up.
+  if (world.fireflies.length < FIREFLY_CAP) {
+    world.spawnFireflyAcc += cfg.fireflyRate * dt;
+    while (world.spawnFireflyAcc >= 1) {
+      world.spawnFireflyAcc -= 1;
+      world.fireflies.push(spawnFirefly(world.rng, world.night));
+    }
   }
-  world.spawnBatAcc += cfg.batRate * dt;
-  while (world.spawnBatAcc >= 1) {
-    world.spawnBatAcc -= 1;
-    world.bats.push(spawnBat(world.rng, cfg.batSpeed, world.night));
+  if (world.bats.length < BAT_CAP) {
+    world.spawnBatAcc += cfg.batRate * dt;
+    while (world.spawnBatAcc >= 1) {
+      world.spawnBatAcc -= 1;
+      world.bats.push(spawnBat(world.rng, cfg.batSpeed, world.night));
+    }
   }
   world.lantern.update(world, dt);
   // A pulse pressed just before a charge landed fires now (input-systems
@@ -294,32 +365,67 @@ function updatePlay(world, dt) {
   for (const f of saved) {
     world.combo += 1;
     world.bestCombo = Math.max(world.bestCombo, world.combo);
-    // Golden fireflies pay 5x and burst bigger; the popup names them.
+    // Golden fireflies pay 5x: a large feedback bundle, the biggest
+    // single-save celebration in the game.
     const gain = 10 * comboMultiplier(world.combo) * (f.golden ? GOLDEN.scoreMult : 1);
     world.score += gain;
     world.saved += 1;
     if (f.golden) {
       world.audio.chime(world.combo + 8);
-      world.feel.burst(f.x, f.y, FEEL.particlesGolden, GOLDEN.color);
-      world.feel.popup(f.x, f.y - 12, `Kunang Emas +${gain}`);
+      world.feel.feedback('large', f.x, f.y - 12, {
+        color: GOLDEN.color,
+        popup: `Kunang Emas +${gain}`,
+      });
     } else {
       world.audio.chime(world.combo);
-      world.feel.burst(f.x, f.y, FEEL.particlesPerSave, '#d8ff7a');
-      world.feel.popup(f.x, f.y - 12, `+${gain}`);
+      // Small tier on purpose: a routine save gets particles and a
+      // popup, no hit-stop, no flash — over-juicing it would hide the
+      // real impacts and feel nauseating on a busy screen.
+      world.feel.feedback('small', f.x, f.y - 12, {
+        color: '#d8ff7a',
+        popup: `+${gain}`,
+      });
     }
-    // Small-tier feedback bundle: burst + popup + lantern pop.
+    // Lantern pop, bigger on combo milestones.
     world.lantern.pop = FEEL.popSec;
+    // Combo milestones fire once per crossing: x5 is a medium bundle,
+    // x10 is a large one, both above the lantern with a bigger pop.
+    const m = comboMilestone(world.combo);
+    if (m > world.comboMilestone) {
+      world.comboMilestone = m;
+      world.feel.feedback(m >= 10 ? 'large' : 'medium', world.lantern.x, LANTERN.y - 80, {
+        color: '#ffcf7d',
+        popup: `Kombo x${m}!`,
+      });
+      world.lantern.popAmp = m >= 10 ? 0.35 : 0.25;
+      world.lantern.pop = FEEL.popSec;
+      world.audio.chime(world.combo + 4);
+    }
   }
-  if (lost.length > 0) world.combo = 0;
+  // A lost firefly costs one combo step instead of resetting it: on a
+  // busy screen losses interleave with saves constantly, and a full
+  // reset would make the x5/x10 milestones unreachable. Being eaten by
+  // a bat or hit by a bat still resets the combo to zero.
+  if (lost.length > 0) {
+    world.combo = Math.max(0, world.combo - lost.length);
+    world.comboMilestone = comboMilestone(world.combo);
+  }
   const { eaten, hitLantern } = updateBats(world, dt);
-  if (eaten.length > 0) world.combo = 0;
+  if (eaten.length > 0) {
+    world.combo = 0;
+    world.comboMilestone = 0;
+  }
   for (let i = 0; i < hitLantern; i++) {
     world.lantern.lives -= 1;
     world.combo = 0;
+    world.comboMilestone = 0;
     world.pulseBufferedAt = -1;
-    // Large-tier feedback bundle: trauma shake + hit-stop + edge flash.
-    world.feel.addTrauma(FEEL.traumaHit);
-    world.feel.hitStopFor(FEEL.hitStopSec);
+    // Large-tier feedback bundle through the single call, plus the red
+    // edge flash (the glow flash stays off: one flash per event).
+    world.feel.feedback('large', world.lantern.x, LANTERN.y, {
+      color: '#ff8a7a',
+      flash: false,
+    });
     world.feel.hitFlash = 1;
     world.audio.thud();
     if (world.lantern.lives <= 0) {
@@ -332,6 +438,7 @@ function updatePlay(world, dt) {
 
 function update(world, dt) {
   world.time += dt;
+  if (world.shakeNote > 0) world.shakeNote -= dt;
   if (world.state === 'pause') return; // frozen, feel included
   world.feel.updateGame(dt);
   if (world.state === 'title') {
@@ -371,6 +478,18 @@ function handleActions(world) {
   for (const action of world.input.drainActions()) {
     if (action === 'mute') {
       world.audio.toggleMute();
+      continue;
+    }
+    if (action === 'shake') {
+      // Cycle the shake strength: 100% -> 50% -> 0% -> 100%. A small
+      // note on screen confirms the new setting (game-feel skill:
+      // ship a shake-strength toggle, 0-100%).
+      const next = world.feel.strength >= 1 ? 0.5
+        : world.feel.strength >= 0.5 ? 0 : 1;
+      world.feel.strength = next;
+      world.shakeLabel = next >= 1 ? 'Goyangan: penuh'
+        : next >= 0.5 ? 'Goyangan: 50%' : 'Goyangan: mati';
+      world.shakeNote = 1.5;
       continue;
     }
     if (action === 'pause') {

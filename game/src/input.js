@@ -16,6 +16,7 @@ const KEY_ACTIONS = {
   ' ': 'pulse',
   p: 'pause',
   m: 'mute',
+  g: 'shake',
   enter: 'start',
   r: 'restart',
   1: 'pick1',
@@ -33,8 +34,8 @@ export class Input {
     this.mouseY = H / 2;
     this.mouseInside = false;
     this.keys = new Set();
-    // One-shot action queue: 'pulse', 'pause', 'mute', 'start', 'restart',
-    // 'pick1', 'pick2', 'pick3'.
+    // One-shot action queue: 'pulse', 'pause', 'mute', 'shake', 'start',
+    // 'restart', 'pick1', 'pick2', 'pick3'.
     this.actions = [];
     // Pointer-down positions in logical coordinates, for the upgrade
     // cards. Every pointer down is recorded here and also queues a

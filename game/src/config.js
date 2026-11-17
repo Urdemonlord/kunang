@@ -10,17 +10,41 @@ export const H = 720;
 export const GROUND_Y = 668;
 
 export const NIGHTS = [
-  // night 1: gentle introduction, few bats
+  // night 1: gentle introduction, few bats — UNCHANGED by the rame pass.
   { duration: 35, fireflyRate: 1.15, batRate: 0.10, batSpeed: 95, fog: 0.30 },
-  // night 2: the valley wakes up
-  { duration: 40, fireflyRate: 1.45, batRate: 0.20, batSpeed: 112, fog: 0.38 },
-  // night 3: bats hunt in earnest
-  { duration: 45, fireflyRate: 1.75, batRate: 0.28, batSpeed: 130, fog: 0.46 },
-  // night 4: thick fog, fast wings
-  { duration: 45, fireflyRate: 2.05, batRate: 0.38, batSpeed: 150, fog: 0.54 },
-  // night 5: the last night before dawn
-  { duration: 50, fireflyRate: 2.40, batRate: 0.50, batSpeed: 172, fog: 0.62 },
+  // night 2: the valley wakes up — and gets busy from here on.
+  { duration: 40, fireflyRate: 3.0, batRate: 1.0, batSpeed: 112, fog: 0.38 },
+  // night 3: bats hunt in earnest, in numbers.
+  { duration: 45, fireflyRate: 3.5, batRate: 1.4, batSpeed: 130, fog: 0.46 },
+  // night 4: thick fog, fast wings, a crowded sky.
+  { duration: 45, fireflyRate: 4.0, batRate: 1.8, batSpeed: 150, fog: 0.54 },
+  // night 5: the last night before dawn, the busiest sky.
+  { duration: 50, fireflyRate: 4.0, batRate: 2.2, batSpeed: 172, fog: 0.62 },
 ];
+
+// Density caps (rame pass): the spawn accumulators freeze at the cap, so
+// the screen stays busy but readable and the lantern can still keep up.
+// Regular spawns stop at BAT_CAP; a wave may push the total to BAT_HARD_CAP.
+export const FIREFLY_CAP = 48;
+export const BAT_CAP = 12;
+export const BAT_HARD_CAP = 18;
+
+// Bat waves (rame pass): { at } is a fraction of the night duration,
+// { size } is how many bats arrive together after a short warning.
+// Night 2-3 get one wave, nights 4-5 get two. No waves on night 1.
+export const WAVES = {
+  2: [{ at: 0.55, size: 6 }],
+  3: [{ at: 0.55, size: 6 }],
+  4: [{ at: 0.35, size: 7 }, { at: 0.70, size: 8 }],
+  5: [{ at: 0.30, size: 7 }, { at: 0.60, size: 8 }],
+};
+
+// Golden shower (rame pass): once per night from night 3, SHOWER.count
+// golden fireflies arrive at once at a random point 40-70% into the night.
+export const SHOWER = {
+  minNight: 3,
+  count: 5,
+};
 
 export const LANTERN = {
   y: 640,
@@ -73,25 +97,27 @@ export const GOLDEN = {
   colorCore: '#fff3c4',
 };
 
-// Game-feel tuning (game-feel skill tiers). Small tier (save): particles
-// only. Medium tier (night clear): particles + flash. Large tier (lantern
-// hit): trauma 0.7, 0.08 s hit-stop, 20-40 particles, hit flash.
-// Spectacle tier (boss): trauma 0.9, 0.12 s hit-stop, big bursts.
+// Game-feel tuning (game-feel skill tiers). Every event fires its bundle
+// from ONE Feel.feedback(tier, x, y) call, so the whole game stays
+// proportional: small = particles only, medium adds a short hit-stop and a
+// soft glow flash, large adds heavy trauma and a longer hit-stop. The
+// boss defeat tops the large tier up to trauma 1 with extra bursts.
+// Routine saves stay small on purpose: no hit-stop, no flash, no nausea.
 export const FEEL = {
-  traumaHit: 0.7,
-  hitStopSec: 0.08,
   hitStopSlow: 0.05,
   shakeDecay: 1.2, // trauma lost per real second
   maxOffsetX: 12,
   maxOffsetY: 8,
-  particlesPerSave: 8,
-  particlesGolden: 24,
-  particlesBossHit: 30,
-  particlesBossDefeat: 60,
   particleCap: 120,
-  traumaBossHit: 0.9,
-  hitStopBossSec: 0.12,
   popSec: 0.18, // lantern squash-and-stretch pop after a save
+  flashCooldownSec: 0.34, // glow flashes at most ~3 per second (WCAG 2.3.1)
+  glowFlashMax: 0.14, // soft amber wash, never a full-screen strobe
+  tiers: {
+    small: { trauma: 0.15, hitStop: 0, particles: 4, flash: false },
+    medium: { trauma: 0.4, hitStop: 0.05, particles: 10, flash: true },
+    large: { trauma: 0.85, hitStop: 0.12, particles: 30, flash: true },
+  },
+  particlesBossDefeat: 60, // extra gold burst on top of the large tier
 };
 
 // Combo tiers: consecutive saves 0-4 pay x1, 5-9 pay x2, 10+ pay x3.
@@ -99,6 +125,15 @@ export function comboMultiplier(combo) {
   if (combo >= 10) return 3;
   if (combo >= 5) return 2;
   return 1;
+}
+
+// Combo milestone watermark: 0, 5, or 10. Milestones fire feedback when
+// the combo first crosses them, and can fire again if the combo falls
+// below and climbs back.
+export function comboMilestone(combo) {
+  if (combo >= 10) return 10;
+  if (combo >= 5) return 5;
+  return 0;
 }
 
 export const COLORS = {

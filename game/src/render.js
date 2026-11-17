@@ -32,6 +32,7 @@ export function drawWorld(ctx, world) {
   drawPopups(ctx, world);
   drawFog(ctx, world);
   drawVignette(ctx);
+  drawGlowFlash(ctx, world);
   drawHitFlash(ctx, world);
   ctx.restore();
   drawHud(ctx, world);
@@ -80,6 +81,15 @@ function drawHitFlash(ctx, world) {
   g.addColorStop(0, 'rgba(255, 77, 77, 0)');
   g.addColorStop(1, `rgba(255, 77, 77, ${0.28 * world.feel.hitFlash})`);
   ctx.fillStyle = g;
+  ctx.fillRect(-20, -20, W + 40, H + 40);
+}
+
+// Soft amber wash for medium/large feedback bundles (combo milestones,
+// golden saves, boss hits). Capped low and rate-limited to ~3 per second
+// in Feel, so it reads as warmth, never as a strobe.
+function drawGlowFlash(ctx, world) {
+  if (world.feel.glowFlash <= 0) return;
+  ctx.fillStyle = `rgba(255, 179, 71, ${0.14 * world.feel.glowFlash})`;
   ctx.fillRect(-20, -20, W + 40, H + 40);
 }
 
@@ -572,6 +582,16 @@ function drawHud(ctx, world) {
   ctx.textBaseline = 'top';
   ctx.font = `400 13px ${HUD_FONT}`;
   ctx.fillText(world.audio.muted ? 'Suara: mati (M)' : 'Suara: hidup (M)', W - 24, H - 28);
+  // Shake-strength note, bottom centre, only while it is fresh.
+  if (world.shakeNote > 0) {
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, world.shakeNote / 0.4);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = COLORS.hud;
+    ctx.font = `400 14px ${HUD_FONT}`;
+    ctx.fillText(world.shakeLabel, W / 2, H - 28);
+    ctx.restore();
+  }
   // Picked upgrades, bottom left: one quiet line, so a build reads in
   // the HUD without shouting. Hidden until the first pick.
   const picked = UPGRADE_DEFS.filter((d) => world.upgrades[d.id] > 0);
@@ -586,6 +606,41 @@ function drawHud(ctx, world) {
   }
   ctx.restore();
   drawBossBanner(ctx, world);
+  drawEventBanner(ctx, world);
+}
+
+// Event banners (rame pass): the wave warning and the golden shower,
+// same typography and placement as the boss banner, so the family stays
+// one voice. Only one shows at a time; the wave takes precedence.
+function drawEventBanner(ctx, world) {
+  let title = null;
+  let sub = null;
+  let color = COLORS.amber;
+  let t = 0;
+  if (world.waveBanner > 0) {
+    title = 'Gelombang kelelawar!';
+    sub = 'Mereka datang bergerombol. Siap-siap kilau.';
+    color = '#ff8a7a';
+    t = world.waveBanner;
+  } else if (world.showerBanner > 0) {
+    title = 'Hujan Kunang Emas!';
+    sub = 'Lima kunang emas sekaligus. Cepat selamatkan.';
+    color = GOLDEN.color;
+    t = world.showerBanner;
+  }
+  if (!title) return;
+  const alpha = Math.min(1, t / 0.5);
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = color;
+  ctx.font = `700 56px ${TITLE_FONT}`;
+  ctx.fillText(title, W / 2, 168);
+  ctx.fillStyle = COLORS.hud;
+  ctx.font = `italic 400 22px ${TITLE_FONT}`;
+  ctx.fillText(sub, W / 2, 216);
+  ctx.restore();
 }
 
 // The boss intro banner, drawn over play (not in the overlay, so the
@@ -687,6 +742,8 @@ function drawTitle(ctx, world) {
     { cap: 'P' }, { text: 'jeda' },
     { gap: 32 },
     { cap: 'M' }, { text: 'suara' },
+    { gap: 32 },
+    { cap: 'G' }, { text: 'goyangan layar' },
   ]);
   // Breathing start prompt.
   const pulse = 0.65 + 0.35 * Math.sin(world.time * 2.4);
