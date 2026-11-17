@@ -8,6 +8,9 @@
 import { W, H, GROUND_Y, COLORS, LANTERN, PULSE, BOSS, GOLDEN } from './config.js';
 import { coneHalfWidthAt } from './fireflies.js';
 import { effConeScale, effMaxLives, effPulseMax, UPGRADE_DEFS } from './upgrades.js';
+import {
+  Sprites, sprite, batSpriteFor, batDrawHeight, fireflyDrawSize, moonCrescent,
+} from './sprites.js';
 
 const TITLE_FONT = 'Georgia, "Times New Roman", serif';
 const HUD_FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';
@@ -25,6 +28,7 @@ export function drawWorld(ctx, world) {
   drawGround(ctx, world);
   drawLightCone(ctx, world);
   drawLanternGlow(ctx, world);
+  drawPulseRing(ctx, world);
   drawFireflies(ctx, world);
   drawBats(ctx, world);
   drawLantern(ctx, world);
@@ -39,13 +43,26 @@ export function drawWorld(ctx, world) {
   drawOverlay(ctx, world);
 }
 
-// Save-burst particles: small amber sparks that arc and fade.
+// Save-burst particles: small amber sparks that arc and fade. A golden
+// burst draws the v2 sparkle instead of a dot, so the biggest moments
+// (golden save, boss defeat) read as starlight, not dust.
 function drawParticles(ctx, world) {
   if (world.feel.particles.length === 0) return;
+  const sparkImg = sprite('sparkle');
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
   for (const p of world.feel.particles) {
     const a = 1 - p.life / p.maxLife;
+    if (sparkImg && p.color === GOLDEN.color) {
+      const s = (p.size * 3 + 6) * a + 4;
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.life * 4);
+      ctx.globalAlpha = a;
+      ctx.drawImage(sparkImg, -s / 2, -s / 2, s, s);
+      ctx.restore();
+      continue;
+    }
     ctx.fillStyle = p.color === '#d8ff7a'
       ? `rgba(216, 255, 122, ${0.85 * a})`
       : p.color;
@@ -95,6 +112,15 @@ function drawGlowFlash(ctx, world) {
 
 function drawSky(ctx, world) {
   const dawn = world.state === 'dawn';
+  // At night the v2 sky sprite is the base: it bakes the gradient, the
+  // stars and the crescent moon, so drawStars/drawMoon skip themselves
+  // while it is on. Dawn keeps the procedural sky (the sprite is night
+  // only), and a failed load falls back to the old gradient.
+  const skyImg = dawn ? null : sprite('sky');
+  if (skyImg) {
+    ctx.drawImage(skyImg, 0, 0, W, H);
+    return;
+  }
   const g = ctx.createLinearGradient(0, 0, 0, H);
   if (dawn) {
     g.addColorStop(0, COLORS.dawnTop);
@@ -120,6 +146,7 @@ function drawSky(ctx, world) {
 
 function drawStars(ctx, world) {
   if (world.state === 'dawn') return;
+  if (sprite('sky')) return; // the stars are baked into the sky sprite
   for (const s of world.stars) {
     const tw = 0.45 + 0.55 * Math.abs(Math.sin(world.time * s.speed + s.phase));
     ctx.globalAlpha = tw * s.alpha;
@@ -131,6 +158,7 @@ function drawStars(ctx, world) {
 
 function drawMoon(ctx, world) {
   if (world.state === 'dawn') return;
+  if (sprite('sky')) return; // the crescent is baked into the sky sprite
   // Low on the right, clear of the HUD block at the top.
   const mx = W - 130;
   const my = 215;
@@ -139,14 +167,15 @@ function drawMoon(ctx, world) {
   glow.addColorStop(1, 'rgba(232, 236, 255, 0)');
   ctx.fillStyle = glow;
   ctx.fillRect(mx - 90, my - 90, 180, 180);
-  // Crescent: a pale disc with the night sky cut out of it.
+  // Crescent as ONE path: outer disc, inner disc cut counter-clockwise.
+  // The old code painted the cut-out with a solid sky colour, which is
+  // darker than the gradient behind it at this height — that is the dark
+  // disc the moon used to wear over its halo.
+  const c = moonCrescent(mx, my);
   ctx.fillStyle = '#eef1ff';
   ctx.beginPath();
-  ctx.arc(mx, my, 34, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = COLORS.skyTop;
-  ctx.beginPath();
-  ctx.arc(mx + 16, my - 8, 30, 0, Math.PI * 2);
+  ctx.arc(c.outer.x, c.outer.y, c.outer.r, 0, Math.PI * 2);
+  ctx.arc(c.inner.x, c.inner.y, c.inner.r, 0, Math.PI * 2, true);
   ctx.fill();
 }
 
@@ -162,6 +191,13 @@ function drawGround(ctx, world) {
   ctx.lineTo(W, H);
   ctx.closePath();
   ctx.fill();
+  // The v2 tree line and grass blades sit on the hill: silhouettes
+  // against the sky, grass at the lantern's feet. The procedural hill
+  // stays underneath as the base (and as the fallback when a file fails).
+  const trees = sprite('trees');
+  if (trees) ctx.drawImage(trees, 0, 0, W, H);
+  const grass = sprite('grass');
+  if (grass) ctx.drawImage(grass, 0, 0, W, H);
   // A thin warm rim where the lantern light kisses the ground.
   const rim = ctx.createLinearGradient(0, GROUND_Y - 4, 0, GROUND_Y + 18);
   rim.addColorStop(0, 'rgba(255, 179, 71, 0.20)');
@@ -225,15 +261,42 @@ function drawLanternGlow(ctx, world) {
   const ly = LANTERN.y;
   const flicker = 1 + Math.sin(world.time * 7.3) * 0.06 + Math.sin(world.time * 13.1) * 0.04;
   const flash = world.lantern.flash > 0 ? 1.6 : 1;
-  const r = 150 * flicker * flash;
-  const g = ctx.createRadialGradient(lx, ly, 10, lx, ly, r);
-  g.addColorStop(0, `rgba(255, 190, 90, ${0.5 * flash})`);
-  g.addColorStop(0.45, 'rgba(255, 160, 60, 0.18)');
-  g.addColorStop(1, 'rgba(255, 160, 60, 0)');
+  const glowImg = sprite('glow');
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
-  ctx.fillStyle = g;
-  ctx.fillRect(lx - r, ly - r, r * 2, r * 2);
+  if (glowImg) {
+    // One soft radial falloff (v2 glow), breathing with the same
+    // flicker math the old gradient used, so the light still breathes.
+    const r = 150 * flicker * flash;
+    ctx.globalAlpha = Math.min(1, 0.85 * flash);
+    ctx.drawImage(glowImg, lx - r, ly - r, r * 2, r * 2);
+  } else {
+    const r = 150 * flicker * flash;
+    const g = ctx.createRadialGradient(lx, ly, 10, lx, ly, r);
+    g.addColorStop(0, `rgba(255, 190, 90, ${0.5 * flash})`);
+    g.addColorStop(0.45, 'rgba(255, 160, 60, 0.18)');
+    g.addColorStop(1, 'rgba(255, 160, 60, 0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(lx - r, ly - r, r * 2, r * 2);
+  }
+  ctx.restore();
+}
+
+// The pulse shockwave: the organic v2 halo (lantern-pulse with the
+// lantern itself erased, so the game's own lantern stays the only one),
+// expanding and fading over the flash. Nothing when the halo is missing:
+// the glow above already brightens on a pulse.
+function drawPulseRing(ctx, world) {
+  const halo = sprite('pulseHalo');
+  if (!halo || world.lantern.flash <= 0) return;
+  const u = 1 - world.lantern.flash / PULSE.flashSec; // 0 at fire, 1 at end
+  const s = 300 + 220 * u;
+  const lx = world.lantern.x;
+  const ly = LANTERN.y;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.globalAlpha = 0.8 * (1 - u);
+  ctx.drawImage(halo, lx - s / 2, ly - s / 2, s, s);
   ctx.restore();
 }
 
@@ -242,31 +305,98 @@ function drawFireflies(ctx, world) {
   ctx.globalCompositeOperation = 'lighter';
   for (const f of world.fireflies) {
     const tw = 0.65 + 0.35 * Math.sin(world.time * 3 + f.twinkle);
-    // Golden fireflies glow gold instead of green, and brighter.
-    const glowRgb = f.golden ? '255, 211, 77' : '216, 255, 122';
-    const core = f.golden ? GOLDEN.colorCore : COLORS.fireflyCore;
-    // Trail: the last few positions fading out behind the dot.
-    for (let i = 0; i < f.trail.length; i++) {
-      const p = f.trail[i];
-      const a = (i / f.trail.length) * 0.22 * tw;
-      ctx.fillStyle = `rgba(${glowRgb}, ${a})`;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, f.size * 0.7, 0, Math.PI * 2);
-      ctx.fill();
+    if (f.golden) {
+      // Golden fireflies keep the procedural gold rendering: the glow,
+      // the core and the dotted trail are all gold, so they never lose
+      // their colour to a green sprite.
+      drawGoldFirefly(ctx, f, tw);
+      continue;
     }
-    const glow = ctx.createRadialGradient(f.x, f.y, 0, f.x, f.y, f.size * 3.2);
-    glow.addColorStop(0, `rgba(${glowRgb}, ${0.75 * tw})`);
-    glow.addColorStop(1, `rgba(${glowRgb}, 0)`);
-    ctx.fillStyle = glow;
-    ctx.beginPath();
-    ctx.arc(f.x, f.y, f.size * 3.2, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = core;
-    ctx.beginPath();
-    ctx.arc(f.x, f.y, f.size * 0.62, 0, Math.PI * 2);
-    ctx.fill();
+    drawTrailRibbon(ctx, f, tw);
+    // Body + glow: dim far away (atmospheric perspective), bright once
+    // the firefly has dropped into the valley. The sprite's own glow
+    // replaces the old radial gradient; the twinkle is its alpha.
+    const bodyImg = f.y < 220 ? sprite('fireflyDim') : sprite('fireflyBright');
+    if (bodyImg) {
+      const s = fireflyDrawSize(f);
+      ctx.globalAlpha = 0.55 + 0.45 * tw;
+      ctx.drawImage(bodyImg, f.x - s / 2, f.y - s / 2, s, s);
+      ctx.globalAlpha = 1;
+    } else {
+      drawPlainFirefly(ctx, f, tw, '216, 255, 122', COLORS.fireflyCore);
+    }
   }
   ctx.restore();
+}
+
+// The old procedural firefly (glow + core, no sprite): the fallback when
+// a sprite file failed, and the base the golden rendering builds on.
+function drawPlainFirefly(ctx, f, tw, glowRgb, core) {
+  const glow = ctx.createRadialGradient(f.x, f.y, 0, f.x, f.y, f.size * 3.2);
+  glow.addColorStop(0, `rgba(${glowRgb}, ${0.75 * tw})`);
+  glow.addColorStop(1, `rgba(${glowRgb}, 0)`);
+  ctx.fillStyle = glow;
+  ctx.beginPath();
+  ctx.arc(f.x, f.y, f.size * 3.2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = core;
+  ctx.beginPath();
+  ctx.arc(f.x, f.y, f.size * 0.62, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawGoldFirefly(ctx, f, tw) {
+  const glowRgb = '255, 211, 77';
+  // Trail: the last few positions fading out behind the dot.
+  for (let i = 0; i < f.trail.length; i++) {
+    const p = f.trail[i];
+    const a = (i / f.trail.length) * 0.22 * tw;
+    ctx.fillStyle = `rgba(${glowRgb}, ${a})`;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, f.size * 0.7, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  drawPlainFirefly(ctx, f, tw, glowRgb, GOLDEN.colorCore);
+}
+
+// Trail ribbon: the v2 trail sprite, head at the firefly, tail along the
+// last few positions. Skipped when the firefly barely moved (the angle
+// would be noise) or the file failed — then the old dotted trail shows.
+function drawTrailRibbon(ctx, f, tw) {
+  const trailImg = sprite('fireflyTrail');
+  if (!trailImg || f.trail.length < 2) {
+    drawDottedTrail(ctx, f, tw, '216, 255, 122');
+    return;
+  }
+  const p0 = f.trail[0];
+  const dx = f.x - p0.x;
+  const dy = f.y - p0.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist < 6) {
+    drawDottedTrail(ctx, f, tw, '216, 255, 122');
+    return;
+  }
+  // The sprite is a 2:1 ribbon with the bright head at its right end,
+  // so the right edge lands on the firefly and the tail streams behind.
+  const len = Math.min(70, Math.max(14, dist * 1.4));
+  const h = Math.min(20, len * 0.5);
+  ctx.save();
+  ctx.translate(f.x, f.y);
+  ctx.rotate(Math.atan2(dy, dx));
+  ctx.globalAlpha = 0.75 * tw;
+  ctx.drawImage(trailImg, -len, -h / 2, len, h);
+  ctx.restore();
+}
+
+function drawDottedTrail(ctx, f, tw, glowRgb) {
+  for (let i = 0; i < f.trail.length; i++) {
+    const p = f.trail[i];
+    const a = (i / f.trail.length) * 0.22 * tw;
+    ctx.fillStyle = `rgba(${glowRgb}, ${a})`;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, f.size * 0.7, 0, Math.PI * 2);
+    ctx.fill();
+  }
 }
 
 function drawBats(ctx, world) {
@@ -275,6 +405,29 @@ function drawBats(ctx, world) {
       drawBoss(ctx, world, bat);
       continue;
     }
+    const m = batSpriteFor(bat.type);
+    const img = sprite(m.file);
+    if (!img) {
+      drawBatProcedural(ctx, world, bat);
+      continue;
+    }
+    // The v2 bat: veined wings, red eyes, baked in. Flap is a vertical
+    // squash breathing with the wingbeat; the sprite is symmetric, so
+    // the direction flip only keeps the transform honest.
+    const w = m.width;
+    const h = batDrawHeight(bat.type);
+    const flapK = 1 - 0.14 * Math.sin(bat.flap);
+    ctx.save();
+    ctx.translate(bat.x, bat.y);
+    ctx.scale(bat.dir, flapK);
+    ctx.drawImage(img, -w / 2, -h / 2, w, h);
+    ctx.restore();
+  }
+}
+
+// The old vector bats (swift / tank / hunter silhouettes with red eyes):
+// kept as the fallback when a sprite file fails to load.
+function drawBatProcedural(ctx, world, bat) {
     const flap = Math.sin(bat.flap) * 0.9;
     const s = bat.scale;
     ctx.save();
@@ -347,18 +500,53 @@ function drawBats(ctx, world) {
     ctx.arc(9, -2, 2.1, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
-  }
 }
 
-// Raja Kelelawar: drawn big in the same silhouette language — broad
-// veined wings, horned ears, fangs, a forked tail, red eyes — with his
-// remaining pulse-hits as pips above him, so the fight reads at a glance.
+// Raja Kelelawar: the v2 boss sprite (horned ears, fangs, forked tail,
+// red eyes baked in) at 460px wide, with his remaining pulse-hits as
+// pips above him, so the fight reads at a glance. The old vector boss
+// stays as the fallback when the sprite file fails to load.
 function drawBoss(ctx, world, bat) {
-  const flap = Math.sin(bat.flap) * 0.9;
   const blink = bat.stagger > 0 && Math.floor(world.time * 12) % 2 === 0;
+  const img = sprite('batBoss');
   ctx.save();
   ctx.translate(bat.x, bat.y);
   if (blink) ctx.globalAlpha = 0.55;
+  if (img) {
+    const w = batSpriteFor('boss').width;
+    const h = batDrawHeight('boss');
+    const flapK = 1 - 0.08 * Math.sin(bat.flap);
+    ctx.scale(bat.dir, flapK);
+    ctx.drawImage(img, -w / 2, -h / 2, w, h);
+  } else {
+    drawBossProcedural(ctx, world, bat);
+  }
+  ctx.restore();
+  // Hit pips above the boss: filled = hits still needed. Above the
+  // sprite now (its wings reach ~140px up), not at -62.
+  const hpLeft = bat.pulseHp - bat.pulseHits;
+  ctx.save();
+  ctx.translate(bat.x, bat.y - 150);
+  for (let i = 0; i < bat.pulseHp; i++) {
+    const cx = (i - (bat.pulseHp - 1) / 2) * 22;
+    ctx.fillStyle = i < hpLeft ? COLORS.batEye : 'rgba(245, 236, 215, 0.25)';
+    ctx.beginPath();
+    ctx.moveTo(cx, -7);
+    ctx.lineTo(cx + 6, 0);
+    ctx.lineTo(cx, 7);
+    ctx.lineTo(cx - 6, 0);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+// The old vector boss: broad veined wings, horned ears, fangs, forked
+// tail, red eyes. Fallback only.
+function drawBossProcedural(ctx, world, bat) {
+  const flap = Math.sin(bat.flap) * 0.9;
+  ctx.save();
+  ctx.translate(0, 0);
   ctx.scale(bat.dir, 1);
   ctx.fillStyle = COLORS.bat;
   // Wings: huge, with a scalloped trailing edge between the finger tips.
@@ -421,22 +609,6 @@ function drawBoss(ctx, world, bat) {
   ctx.arc(22, -4, 4.5, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
-  // Hit pips above the boss: filled = hits still needed.
-  const hpLeft = bat.pulseHp - bat.pulseHits;
-  ctx.save();
-  ctx.translate(bat.x, bat.y - 62);
-  for (let i = 0; i < bat.pulseHp; i++) {
-    const cx = (i - (bat.pulseHp - 1) / 2) * 22;
-    ctx.fillStyle = i < hpLeft ? COLORS.batEye : 'rgba(245, 236, 215, 0.25)';
-    ctx.beginPath();
-    ctx.moveTo(cx, -7);
-    ctx.lineTo(cx + 6, 0);
-    ctx.lineTo(cx, 7);
-    ctx.lineTo(cx - 6, 0);
-    ctx.closePath();
-    ctx.fill();
-  }
-  ctx.restore();
 }
 
 function drawLantern(ctx, world) {
@@ -451,6 +623,16 @@ function drawLantern(ctx, world) {
   ctx.translate(lx, ly);
   const s = l.popScale();
   if (s !== 1) ctx.scale(s, s);
+  // The v2 lantern: bulged glass, teardrop flame, vented chimney, at the
+  // same 44px footprint as the old vector body, so the light cone and
+  // the save radius still line up with the picture. On game over the
+  // lamp is out: the unlit sprite, "Lentera Padam" in the picture too.
+  const lanternImg = world.state === 'gameover'
+    ? sprite('lanternOff')
+    : sprite('lanternLit');
+  if (lanternImg) {
+    ctx.drawImage(lanternImg, -22, -32, 44, 59);
+  } else {
   // Handle.
   ctx.strokeStyle = '#3a2c18';
   ctx.lineWidth = 4;
@@ -479,6 +661,7 @@ function drawLantern(ctx, world) {
   ctx.beginPath();
   ctx.ellipse(0, 2, 6 * fl, 11 * fl, 0, 0, Math.PI * 2);
   ctx.fill();
+  }
   ctx.restore();
 }
 

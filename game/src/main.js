@@ -15,6 +15,7 @@ import { spawnFirefly, updateFireflies } from './fireflies.js';
 import { spawnBat, spawnBoss, spawnWaveBats, updateBats } from './bats.js';
 import { drawWorld } from './render.js';
 import { applyShot } from './shots.js';
+import { loadSprites, Sprites } from './sprites.js';
 import { freshUpgrades, rollChoices, applyUpgrade, effPulseMax } from './upgrades.js';
 
 const canvas = document.getElementById('game');
@@ -565,14 +566,23 @@ function drawScale() {
 const params = new URLSearchParams(window.location.search);
 const shot = params.get('shot');
 fitCanvas();
-if (shot) {
-  // Screenshot mode: one deterministic frame, no loop, no sound.
-  const seed = Number(params.get('seed') || 1);
-  applyShot(world, shot, seed);
-  const s = drawScale();
-  ctx.setTransform(s, 0, 0, s, 0, 0);
-  drawWorld(ctx, world);
-} else {
+// Sprites load first: a ?shot= frame must never catch a half-loaded
+// sprite, or two renders of the same shot would differ. Shot mode waits
+// for the full load (local files, fast; a failed file falls back to the
+// procedural drawing, deterministically). Live mode starts after 3 s at
+// the latest, with whatever loaded by then.
+window.__kunangSprites = Sprites;
+function boot() {
+  window.__kunangReady = true;
+  if (shot) {
+    // Screenshot mode: one deterministic frame, no loop, no sound.
+    const seed = Number(params.get('seed') || 1);
+    applyShot(world, shot, seed);
+    const s = drawScale();
+    ctx.setTransform(s, 0, 0, s, 0, 0);
+    drawWorld(ctx, world);
+    return;
+  }
   let last = performance.now();
   function frame(now) {
     // Real dt first: the feel layer (hit-stop timer, trauma decay) runs
@@ -589,4 +599,12 @@ if (shot) {
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
+}
+if (shot) {
+  loadSprites().then(boot);
+} else {
+  Promise.race([
+    loadSprites(),
+    new Promise((resolve) => setTimeout(resolve, 3000)),
+  ]).then(boot);
 }

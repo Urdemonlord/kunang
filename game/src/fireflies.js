@@ -56,8 +56,10 @@ export function updateFireflies(world, dt) {
   for (const f of world.fireflies) {
     if (f.dead) continue;
     // Remember the trail before moving, so the glow follows the path.
+    // 18 points, not 9: the v2 trail ribbon needs a longer tail to read
+    // as a comet, and the trail is visual only (no gameplay reads it).
     f.trail.push({ x: f.x, y: f.y });
-    if (f.trail.length > 9) f.trail.shift();
+    if (f.trail.length > 18) f.trail.shift();
     const t = world.time + f.phase;
     let vx = Math.sin(t * f.wobbleSpeed) * f.wobbleAmp;
     let vy = f.baseFall;

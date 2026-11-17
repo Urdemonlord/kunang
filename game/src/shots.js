@@ -1,10 +1,11 @@
 // Deterministic screenshot states for Kunang.
 // ?shot=start shows the title screen, ?shot=play a fixed mid-play scene,
 // ?shot=boss the night-5 boss fight, ?shot=wave a dense night-4 wave
-// moment, ?shot=upgrade the between-night upgrade choice, ?shot=end the
-// Dawn victory screen — all from a seeded RNG, so the same query renders
-// the same bytes on every run. The live game never calls this; main.js
-// calls it once when a ?shot= query is present.
+// moment, ?shot=shower the night-3 golden shower, ?shot=upgrade the
+// between-night upgrade choice, ?shot=end the Dawn victory screen — all
+// from a seeded RNG, so the same query renders the same bytes on every
+// run. The live game never calls this; main.js calls it once when a
+// ?shot= query is present.
 
 import { W, H, NIGHTS, LANTERN, BOSS, WAVES, mulberry32 } from './config.js';
 import { spawnFirefly, updateFireflies } from './fireflies.js';
@@ -25,6 +26,8 @@ export function applyShot(world, name, seed) {
     buildBossScene(world, rng);
   } else if (name === 'wave') {
     buildWaveScene(world, rng);
+  } else if (name === 'shower') {
+    buildShowerScene(world, rng);
   } else if (name === 'upgrade') {
     buildUpgradeScene(world, rng);
   } else if (name === 'end') {
@@ -251,6 +254,80 @@ function buildWaveScene(world, rng) {
   world.combo = 8;
   world.bestCombo = 10;
   world.saved = 54;
+  world.lantern.lives = 3;
+  world.lantern.pulseCharges = 2;
+  world.lantern.flash = 0.55;
+}
+
+// Golden shower, night 3 (round 5): a real simulated stretch to the
+// shower, frozen as five golden fireflies arrive in a row under the gold
+// banner, the sky crowded. Same placement rule as the live shower.
+function buildShowerScene(world, rng) {
+  world.state = 'play';
+  world.night = 3;
+  world.nightDuration = NIGHTS[2].duration;
+  world.nightFog = NIGHTS[2].fog;
+  world.score = 620;
+  world.combo = 7;
+  world.bestCombo = 9;
+  world.saved = 44;
+  world.lantern.lives = 3;
+  world.lantern.pulseCharges = 2;
+  world.lantern.flash = 0.55;
+  world.showerBanner = 2.2;
+  world.showerFired = true;
+  world.comboMilestone = 5;
+  const cfg = NIGHTS[2];
+  const showerAt = cfg.duration * 0.55;
+  let fireflyAcc = 0;
+  let batAcc = 0;
+  const dt = 1 / 60;
+  for (let step = 0; step < Math.round(showerAt * 60); step++) {
+    const t = step * dt;
+    world.time = t;
+    world.nightTime = t;
+    world.lantern.x = 640 + Math.sin(t * 0.45) * 280;
+    fireflyAcc += cfg.fireflyRate * dt;
+    while (fireflyAcc >= 1) {
+      fireflyAcc -= 1;
+      world.fireflies.push(spawnFirefly(rng, 3));
+    }
+    batAcc += cfg.batRate * dt;
+    while (batAcc >= 1) {
+      batAcc -= 1;
+      world.bats.push(spawnBat(rng, cfg.batSpeed, 3));
+    }
+    updateFireflies(world, dt);
+    updateBats(world, dt);
+  }
+  world.nightTime = showerAt;
+  // The shower itself: five goldens in a row across the upper sky.
+  for (let i = 0; i < 5; i++) {
+    const gold = spawnFirefly(rng, 3, true);
+    gold.x = 120 + (W - 240) * (i / 4);
+    gold.y = 200 + rng() * 120;
+    prefillTrail(gold);
+    world.fireflies.push(gold);
+  }
+  // Guarantee the frame reads as crowded: at least 25 fireflies and
+  // 4 bats on screen.
+  while (world.fireflies.length < 25) {
+    const f = spawnFirefly(rng, 3);
+    f.y = 90 + rng() * 420;
+    f.x = 60 + rng() * (W - 120);
+    prefillTrail(f);
+    world.fireflies.push(f);
+  }
+  while (world.bats.length < 4) {
+    const b = spawnBat(rng, cfg.batSpeed, 3);
+    b.x = 300 + rng() * 680;
+    b.y = 150 + rng() * 160;
+    world.bats.push(b);
+  }
+  world.score = 620;
+  world.combo = 7;
+  world.bestCombo = 9;
+  world.saved = 44;
   world.lantern.lives = 3;
   world.lantern.pulseCharges = 2;
   world.lantern.flash = 0.55;

@@ -73,3 +73,46 @@ Arcade malam kecil, "still, watchful, warm", satu aksen amber di atas indigo gel
 - Yang masih rusak: bulan sabit masih render seperti cakram gelap menimpa halo (sudah begitu sejak v2, bukan regresi; tidak disentuh). Satu kelelawar gelombang di screenshot 2-wave.jpg bertumpuk di atas bulan. Siluet jenis kelelawar beda dari dekat tapi kecil di layar; di ukuran contact sheet bedanya kebanyakan ukuran + kecepatan.
 - Yang ditebak: tarif spawn malam 2-5 (angka dari rasa, belum playtest manusia; bat rate sudah dinaikkan sekali setelah pengukuran live membuktikan 0.7/dtk terlalu sepi); aturan kombo hilang -1 per kunang jatuh (baru di putaran ini, supaya milestone tetap bisa dicapai di layar padat); campuran gelombang dan titik hujan (40-70% malam) belum diuji manusia; bot headless bukan pemain manusia.
 - Not yet played by a person.
+
+---
+
+# Kunang — Round 5 Visual Overhaul (di atas rame pass)
+
+Premis (kata-kata Arya): game top terlihat seperti "game game asli yg niat", lebih ke aset-asetnya yang bagus. Juri best-game-01 tidak pernah memainkan game, dia menilai dari 4 screenshot + outline source, jadi putaran ini murni visual: sprite v2 menjadi art yang dirender game. Gameplay LOGIC tidak disentuh sama sekali.
+
+Skill yang dipakai: `game_asset_delivery` (mulai dari referensi nyata, cek logika sebelum gaya, label jujur, revisi = nama baru berversi), `awesome-gamedev-agent-skills/skills/disciplines/create-game-assets` (frame teknis terkunci, keluarga aset, validasi di skala asli, provenance dicatat), `.../disciplines/game-feel` (tier juice yang sudah ada, tidak ditambah), plus antislop-ui + design-taste-frontend + game-studio-workflow.
+
+Provenance (jujur): sprite v2 di `~/workspace/makefun/kunang-sprites/` adalah PNG prosedural yang dipoles dari referensi FOTO nyata (siluet kelelawar, palem malam, lampu minyak, close-up kunang), BUKAN AI-generated, dan BUKAN art final gambar tangan. Kelasnya placeholder prosedural yang dipoles, bukan art final. File sumber v2 tidak ditimpa; halo kilau turunan (`pulse-halo-v2.png`) dibuat baru dari `lantern-pulse-v2.png` dengan kotak lentera dihapus.
+
+Anti-pilar putaran rame yang sengaja DILANGGAR (disetujui Arya 2026-11-17 20:52 WIB, "Gas, round 5 visual"): "Jangan tambah aset gambar (tetap canvas prosedural)". Putaran ini menambah 15 PNG di `game/assets/` (total 312 KB, game/ tetap 414 KB, jauh di bawah cap 48 MiB / 993 file).
+
+## Design read
+
+Arcade malam kecil, "still, watchful, warm", satu aksen amber di atas indigo gelap, bahasa siluet datar ala buku cerita. Palet verbatim dari `config.js` (langit #0b1026→#131a3d→#1d2547, amber #ffb347, kunang #d8ff7a, mata kelelawar #ff4d4d). Sprite menggantikan gambar prosedural di tempat sprite jelas lebih bagus; glow/cone prosedural dipertahankan di tempat sprite kalah (cone cahaya, glow lentera, kabut, vignette, fajar).
+
+## Yang dibangun (urut)
+
+1. [x] Latar: `bg-sky-v2` (gradasi + bintang + bulan sabit yang benar) menggantikan gradasi prosedural di malam hari; fajar tetap prosedural (gradasi + matahari). `bg-trees-v2` dan `bg-grass-v2` digambar di atas bukit prosedural (bukit tetap di bawahnya, karena grass hanya pita rumput di bawah). Bintang/bulan prosedural dilewati saat sky sprite aktif.
+2. [x] Bulan sabit DIPERBAIKI (akhirnya): fallback prosedural sekarang pakai satu path dua busur (lingkaran luar + lingkaran dalam berlawanan arah), bukan menimpa dengan warna langit. Bulan di `bg-sky-v2` sudah benar dari sumbernya. Bug cakram gelap sejak v2 hilang di semua frame.
+3. [x] Kunang: trail ribbon sprite (diputar mengikuti kecepatan, kepala di kunang, panjang 14-70px) + badan dim (y<220, perspektif atmosfer) / bright. Kunang emas tetap prosedural penuh (emas tidak pernah jadi hijau). Cap trail naik 9 -> 18 supaya ribbon terbaca sebagai komet (visual only, tidak ada logika yang membaca trail).
+4. [x] Kelelawar: sprite + flap squash vertikal (0.14, boss 0.08), fallback prosedural dipertahankan. Mapping: Swift -> bat-swift-v2 84px, Hunter -> bat-big-v2 96px, Tank -> bat-big-v2 150px (satu file, beda ukuran + kecepatan + perilaku), Boss -> bat-boss-v2 460px. Hitbox tidak berubah (dari config.js).
+5. [x] Boss: sprite 460px + pip HP dipindah ke y-150 (di atas sprite, bukan -62). Fallback prosedural dipertahankan.
+6. [x] Lentera: sprite lit 44x59 (footprint sama dengan badan vektor lama, cone dan radius save tetap sejajar); sprite off saat game over ("Lentera Padam" terlihat di gambar). Pop squash-and-stretch + blink invuln dipertahankan.
+7. [x] Juice: halo kilau turunan `pulse-halo-v2.png` (kotak lentera dihapus, alpha tengah 3) mengembang 300->520px selama flash 1.4 dtk; sparkle-v2 untuk partikel emas, titik untuk sisanya. Glow lentera tetap gradasi prosedural (lebih bagus dari sprite glow).
+8. [x] Boot async: `loadSprites()` sebelum frame pertama; `window.__kunangReady = true` setelah draw pertama; `window.__kunangSprites = Sprites`. Mode ?shot= menunggu load penuh; mode live mulai paling lambat 3 dtk (race timeout) supaya game tetap jalan kalau ada file yang macet. File gagal -> fallback prosedural, deterministik.
+9. [x] Scene baru `?shot=shower` (malam 3, 5 kunang emas + banner "Hujan Kunang Emas!"). TIDAK dipakai di 4 screenshot yang dikirim: frame shower dibanding langsung dengan 2-boss dan kalah, kunang emasnya tersebar sebagai titik-titik kecil yang di ukuran contact sheet terbaca seperti kunang biasa, sementara frame boss menunjukkan boss + pip HP + aksi terpadat. Scene shower tetap ada di kode untuk ronde berikut.
+10. [x] Screenshot baru (tepat 4, masing-masing <=256 KiB): 1-start (62.784 B), 2-boss (51.296 B), 3-upgrade (65.000 B), 4-end (79.404 B). Round-4 pindah ke screenshots-old/ dengan suffix -r4 (1-start-r4, 2-wave-r4, 3-upgrade-r4, 4-end-r4; file lama tidak ditimpa).
+
+## Anti-pilar
+
+- Jangan ubah logika gameplay: spawn rate, fisika, tabrakan, perilaku boss, upgrade, gelombang, hujan emas, aturan kombo, tier juice, toggle G, kontrol, durasi malam. (Satu-satunya sentuhan logika: cap trail 9 -> 18, visual only.)
+- Jangan ubah palet (verbatim dari config.js).
+- Jangan timpa file sumber sprite v2; revisi pakai nama baru berversi.
+- Jangan rusak frame ?shot= yang sudah ada; semua tetap deterministik (render 2x byte-identik).
+
+## Handover (diisi di akhir)
+
+- Yang lolos: semua 10 item; unit baru 108/108 (`kunang-verify/unit-r5.mjs`: manifest 15 file + ukuran + RGBA, mapping kelelawar + urutan lebar, geometri bulan, invariansi logika 33/33+35/35 yang dibuat ulang ringkas, smoke test 7 scene ?shot=); live 33/33 tanpa error konsol/page/request (`kunang-verify/live-r5.py`: 7 shot deterministik + semua sprite termuat, title -> malam 1 -> G bersiklus 1->0.5->0->1 -> malam 5 -> boss kalah 3 kilau -> fajar -> restart -> game over); staging `MAKEFUN_OUTPUT_DIR=/tmp/kunang-out node main.ts` exit 0, 28 file game (414 KB), dossier menyebut visual overhaul + 56x sprite; 4 screenshot dilihat penuh di ukuran asli.
+- Yang masih rusak: kanopi bundar masih seperti awan/lolipop dari jauh (di 4-end paling jelas); palem masih seperti pinwheel dari jauh; sayap kelelawar gelap, urat sayap hanya kelihatan dari dekat, di ukuran contact sheet kelelawar terbaca sebagai siluet hitam + mata merah; bulan di 3-upgrade bertumpuk di belakang teks "kilau" (masih terbaca); kartu upgrade punya ruang kosong besar di bawah deskripsi; teks "Tekan R..." di 4-end menimpa batang palem (terbaca tapi berisik); kunang emas di frame shower tersebar, tidak terbaca sebagai hujan (alasan tidak dipakai).
+- Yang ditebak: lebar sprite kelelawar (84/96/150/460) dari rasa supaya terbaca di contact sheet, bukan dari pengukuran; halo kilau 300->520px dari rasa; urutan G dan semua aturan gameplay tidak disentuh, jadi tidak perlu ditebak ulang.
+- Not yet played by a person.
