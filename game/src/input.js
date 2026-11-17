@@ -18,6 +18,9 @@ const KEY_ACTIONS = {
   m: 'mute',
   enter: 'start',
   r: 'restart',
+  1: 'pick1',
+  2: 'pick2',
+  3: 'pick3',
 };
 
 // Held movement: -1 left, +1 right.
@@ -30,8 +33,15 @@ export class Input {
     this.mouseY = H / 2;
     this.mouseInside = false;
     this.keys = new Set();
-    // One-shot action queue: 'pulse', 'pause', 'mute', 'start', 'restart'.
+    // One-shot action queue: 'pulse', 'pause', 'mute', 'start', 'restart',
+    // 'pick1', 'pick2', 'pick3'.
     this.actions = [];
+    // Pointer-down positions in logical coordinates, for the upgrade
+    // cards. Every pointer down is recorded here and also queues a
+    // 'pulse' action, exactly as before; the game state decides which
+    // one it consumes (play consumes the pulse, upgrade consumes the
+    // click), and the other is dropped with the frame's action queue.
+    this.clicks = [];
     this._onPointerMove = (e) => {
       const r = this.canvas.getBoundingClientRect();
       this.mouseX = ((e.clientX - r.left) * W) / r.width;
@@ -40,6 +50,7 @@ export class Input {
     };
     this._onPointerDown = (e) => {
       this._onPointerMove(e);
+      this.clicks.push({ x: this.mouseX, y: this.mouseY });
       this.actions.push('pulse');
     };
     this._onPointerLeave = () => {
@@ -78,6 +89,13 @@ export class Input {
   drainActions() {
     const out = this.actions;
     this.actions = [];
+    return out;
+  }
+
+  // Pull and clear the queued pointer-down positions (call once per frame).
+  drainClicks() {
+    const out = this.clicks;
+    this.clicks = [];
     return out;
   }
 

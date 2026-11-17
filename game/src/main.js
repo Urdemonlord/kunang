@@ -1,19 +1,21 @@
 // Kunang — Penjaga Lentera: game loop and state machine.
-// States: title -> play -> (nightclear -> play) x5 -> dawn, or play ->
-// gameover. The loop runs on requestAnimationFrame with a clamped delta;
-// ?shot=start|play|end renders one deterministic frame instead, for the
-// screenshots. Scoring, nights, lives and pulses all live here; the
-// entities, the lantern, the sound and the drawing live in their own files.
+// States: title -> play -> (upgrade -> nightclear -> play) x4 -> play
+// (night 5, boss) -> dawn, or play -> gameover. The loop runs on
+// requestAnimationFrame with a clamped delta; ?shot=start|play|end
+// renders one deterministic frame instead, for the screenshots.
+// Scoring, nights, lives and pulses all live here; the entities, the
+// lantern, the sound and the drawing live in their own files.
 
-import { W, H, NIGHTS, LANTERN, PULSE, LIVES, FEEL, comboMultiplier, mulberry32 } from './config.js';
+import { W, H, NIGHTS, LANTERN, PULSE, LIVES, FEEL, BOSS, GOLDEN, comboMultiplier, mulberry32 } from './config.js';
 import { Input } from './input.js';
 import { AudioSys } from './audio.js';
 import { Lantern } from './lantern.js';
 import { Feel } from './feel.js';
 import { spawnFirefly, updateFireflies } from './fireflies.js';
-import { spawnBat, updateBats } from './bats.js';
+import { spawnBat, spawnBoss, updateBats } from './bats.js';
 import { drawWorld } from './render.js';
 import { applyShot } from './shots.js';
+import { freshUpgrades, rollChoices, applyUpgrade, effPulseMax } from './upgrades.js';
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -86,6 +88,15 @@ function createWorld() {
     ambientAcc: 0,
     feel: new Feel(),
     pulseBufferedAt: -1, // game time of a pulse press that found no charge
+    // Upgrades (between nights) and the night-5 boss.
+    upgrades: freshUpgrades(),
+    upgradeChoices: [],
+    upgradeCardRects: [],
+    lastUpgrade: null,
+    upgradeConfirm: 0, // seconds the picked card stays highlighted
+    boss: null,
+    bossBanner: 0, // seconds the "Raja Kelelawar datang" banner stays up
+    bossDefeatTimer: 0, // seconds of celebration before the night ends
   };
 }
 
@@ -133,6 +144,14 @@ function startGame() {
   world.feel = new Feel();
   world.pulseBufferedAt = -1;
   world.rng = mulberry32((Math.random() * 0x7fffffff) | 0);
+  world.upgrades = freshUpgrades();
+  world.upgradeChoices = [];
+  world.upgradeCardRects = [];
+  world.lastUpgrade = null;
+  world.upgradeConfirm = 0;
+  world.boss = null;
+  world.bossBanner = 0;
+  world.bossDefeatTimer = 0;
   world.state = 'play';
   world.audio.ensure();
 }
@@ -146,6 +165,9 @@ function beginNight(n) {
   world.bats = [];
   world.spawnFireflyAcc = 0;
   world.spawnBatAcc = 0;
+  world.boss = null;
+  world.bossBanner = 0;
+  world.bossDefeatTimer = 0;
   world.state = 'play';
 }
 
@@ -157,8 +179,52 @@ function endNight() {
     world.bannerTimer = 0;
     return;
   }
-  world.state = 'nightclear';
-  world.bannerTimer = 2.8;
+  // The upgrade choice comes first; the night-clear banner after the
+  // pick shows what was chosen. No choices left (everything maxed) skips
+  // straight to the banner.
+  world.upgradeChoices = rollChoices(world);
+  if (world.upgradeChoices.length === 0) {
+    world.state = 'nightclear';
+    world.bannerTimer = 2.8;
+    return;
+  }
+  world.upgradeConfirm = 0;
+  world.state = 'upgrade';
+}
+
+// Apply the picked upgrade card, then show the night-clear banner (which
+// names the pick) before the next night begins.
+function pickUpgrade(world, index) {
+  if (world.state !== 'upgrade' || world.upgradeConfirm > 0) return;
+  const def = world.upgradeChoices[index];
+  if (!def) return;
+  applyUpgrade(world, def);
+  world.audio.nightClear();
+  world.upgradeConfirm = 1.0;
+}
+
+// The spectacle for a pulse that hit the boss: a big shake, a longer
+// hit-stop and a burst where he hangs. A defeated boss pays the bonus,
+// bursts gold, and ends night 5 after a short celebration.
+function handlePulseResult(world, res) {
+  if (!res) return;
+  if (res.bossHit) {
+    world.feel.addTrauma(FEEL.traumaBossHit);
+    world.feel.hitStopFor(FEEL.hitStopBossSec);
+    world.feel.burst(res.bossX, res.bossY, FEEL.particlesBossHit, '#ff8a7a');
+    world.audio.thud();
+  }
+  if (res.bossDefeated) {
+    world.score += BOSS.scoreBonus;
+    world.feel.burst(res.bossX, res.bossY, FEEL.particlesBossDefeat, GOLDEN.color);
+    world.feel.burst(res.bossX, res.bossY, FEEL.particlesBossDefeat / 2, '#d8ff7a');
+    world.feel.popup(res.bossX, res.bossY - 40, `Raja Kelelawar kalah! +${BOSS.scoreBonus}`);
+    world.feel.addTrauma(1);
+    world.feel.hitStopFor(FEEL.hitStopBossSec);
+    world.audio.nightClear();
+    world.boss = null;
+    world.bossDefeatTimer = 1.2;
+  }
 }
 
 function gameOver() {
@@ -183,22 +249,42 @@ function driftAmbient(world, dt, rate) {
 function updatePlay(world, dt) {
   const cfg = NIGHTS[world.night - 1];
   world.nightTime += dt;
+  // Night 5: the boss swoops in a couple of seconds after the night starts.
+  if (world.night === 5 && !world.boss && world.bossDefeatTimer <= 0
+      && world.nightTime >= BOSS.spawnAtSec) {
+    world.boss = spawnBoss(world.rng);
+    world.bats.push(world.boss);
+    world.bossBanner = 2.5;
+  }
+  if (world.bossBanner > 0) world.bossBanner -= dt;
+  // The boss is defeated: celebrate the burst for a moment, then the
+  // night ends early. No new spawns during the celebration.
+  if (world.bossDefeatTimer > 0) {
+    world.bossDefeatTimer -= dt;
+    world.lantern.update(world, dt);
+    updateFireflies(world, dt);
+    updateBats(world, dt);
+    if (world.bossDefeatTimer <= 0) endNight();
+    return;
+  }
   world.spawnFireflyAcc += cfg.fireflyRate * dt;
   while (world.spawnFireflyAcc >= 1) {
     world.spawnFireflyAcc -= 1;
-    world.fireflies.push(spawnFirefly(world.rng));
+    world.fireflies.push(spawnFirefly(world.rng, world.night));
   }
   world.spawnBatAcc += cfg.batRate * dt;
   while (world.spawnBatAcc >= 1) {
     world.spawnBatAcc -= 1;
-    world.bats.push(spawnBat(world.rng, cfg.batSpeed));
+    world.bats.push(spawnBat(world.rng, cfg.batSpeed, world.night));
   }
   world.lantern.update(world, dt);
   // A pulse pressed just before a charge landed fires now (input-systems
   // action buffer: 0.15 s, game time, consumed once).
   if (world.pulseBufferedAt >= 0 && world.time - world.pulseBufferedAt <= 0.15) {
-    if (world.lantern.pulse(world)) {
+    const res = world.lantern.pulse(world);
+    if (res) {
       world.audio.whoosh();
+      handlePulseResult(world, res);
       world.pulseBufferedAt = -1;
     }
   } else if (world.pulseBufferedAt >= 0) {
@@ -208,13 +294,20 @@ function updatePlay(world, dt) {
   for (const f of saved) {
     world.combo += 1;
     world.bestCombo = Math.max(world.bestCombo, world.combo);
-    const gain = 10 * comboMultiplier(world.combo);
+    // Golden fireflies pay 5x and burst bigger; the popup names them.
+    const gain = 10 * comboMultiplier(world.combo) * (f.golden ? GOLDEN.scoreMult : 1);
     world.score += gain;
     world.saved += 1;
-    world.audio.chime(world.combo);
+    if (f.golden) {
+      world.audio.chime(world.combo + 8);
+      world.feel.burst(f.x, f.y, FEEL.particlesGolden, GOLDEN.color);
+      world.feel.popup(f.x, f.y - 12, `Kunang Emas +${gain}`);
+    } else {
+      world.audio.chime(world.combo);
+      world.feel.burst(f.x, f.y, FEEL.particlesPerSave, '#d8ff7a');
+      world.feel.popup(f.x, f.y - 12, `+${gain}`);
+    }
     // Small-tier feedback bundle: burst + popup + lantern pop.
-    world.feel.burst(f.x, f.y, FEEL.particlesPerSave, '#d8ff7a');
-    world.feel.popup(f.x, f.y - 12, `+${gain}`);
     world.lantern.pop = FEEL.popSec;
   }
   if (lost.length > 0) world.combo = 0;
@@ -255,6 +348,19 @@ function update(world, dt) {
     if (world.bannerTimer <= 0) beginNight(world.night + 1);
     return;
   }
+  if (world.state === 'upgrade') {
+    // The choice waits on the player, no timer. After a pick, the chosen
+    // card stays highlighted briefly, then the night-clear banner names it.
+    driftAmbient(world, dt, 0.7);
+    if (world.upgradeConfirm > 0) {
+      world.upgradeConfirm -= dt;
+      if (world.upgradeConfirm <= 0) {
+        world.state = 'nightclear';
+        world.bannerTimer = 2.8;
+      }
+    }
+    return;
+  }
   // dawn + gameover: the sky keeps breathing behind the end screen.
   driftAmbient(world, dt, 0.4);
 }
@@ -277,9 +383,11 @@ function handleActions(world) {
         startGame();
       } else if (world.state === 'play') {
         world.audio.ensure();
-        if (world.lantern.pulse(world)) {
+        const res = world.lantern.pulse(world);
+        if (res) {
           world.audio.whoosh();
-        } else if (world.lantern.pulseCharges < PULSE.max) {
+          handlePulseResult(world, res);
+        } else if (world.lantern.pulseCharges < effPulseMax(world.upgrades)) {
           // No charge yet: remember the press briefly, so it fires the
           // moment the next charge lands (0.15 s window, game time).
           world.pulseBufferedAt = world.time;
@@ -299,7 +407,29 @@ function handleActions(world) {
       if (world.state === 'dawn' || world.state === 'gameover' || world.state === 'pause') {
         startGame();
       }
+      continue;
     }
+    if (action === 'pick1' || action === 'pick2' || action === 'pick3') {
+      if (world.state === 'upgrade') {
+        pickUpgrade(world, Number(action.slice(4)) - 1);
+      }
+      continue;
+    }
+  }
+  // Upgrade cards are also clickable: a pointer down inside a card picks it.
+  if (world.state === 'upgrade' && world.upgradeConfirm <= 0) {
+    for (const click of world.input.drainClicks()) {
+      const idx = world.upgradeCardRects.findIndex((r) => (
+        click.x >= r.x && click.x <= r.x + r.w
+        && click.y >= r.y && click.y <= r.y + r.h
+      ));
+      if (idx >= 0) {
+        pickUpgrade(world, idx);
+        break;
+      }
+    }
+  } else {
+    world.input.drainClicks();
   }
 }
 

@@ -5,8 +5,9 @@
 // indigo night against warm amber light, so the scene reads at a glance
 // even when the screenshot is shrunk to a contact sheet.
 
-import { W, H, GROUND_Y, COLORS, LANTERN, PULSE } from './config.js';
+import { W, H, GROUND_Y, COLORS, LANTERN, PULSE, BOSS, GOLDEN } from './config.js';
 import { coneHalfWidthAt } from './fireflies.js';
+import { effConeScale, effMaxLives, effPulseMax, UPGRADE_DEFS } from './upgrades.js';
 
 const TITLE_FONT = 'Georgia, "Times New Roman", serif';
 const HUD_FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';
@@ -162,13 +163,16 @@ function drawGround(ctx, world) {
 // The cone is pre-rendered once to an offscreen sprite: thin horizontal
 // slices, each fading to transparent at its own edges and brighter toward
 // the lantern. Drawing a gradient across the whole trapezoid left a hard
-// step where the clip cut it; slices have no edge at all.
+// step where the clip cut it; slices have no edge at all. The sprite is
+// rebuilt when the cone upgrade changes its width.
 let coneSprite = null;
+let coneSpriteScale = 1;
 
-function buildConeSprite() {
-  if (coneSprite) return coneSprite;
+function buildConeSprite(scale) {
+  if (coneSprite && scale === coneSpriteScale) return coneSprite;
+  coneSpriteScale = scale;
   const pad = 30;
-  const w = Math.ceil((LANTERN.coneHalfBottom + pad) * 2);
+  const w = Math.ceil((LANTERN.coneHalfBottom * scale + pad) * 2);
   const h = LANTERN.y - LANTERN.coneTopY;
   const c = document.createElement('canvas');
   c.width = w;
@@ -177,7 +181,7 @@ function buildConeSprite() {
   const cx = w / 2;
   for (let y = 0; y < h; y += 6) {
     const worldY = LANTERN.coneTopY + y;
-    const half = coneHalfWidthAt(worldY);
+    const half = coneHalfWidthAt(worldY, scale);
     // Faint at the sky, strong near the lantern.
     const v = Math.pow(y / h, 1.6);
     const peak = 0.34 * v + 0.015;
@@ -193,7 +197,7 @@ function buildConeSprite() {
 }
 
 function drawLightCone(ctx, world) {
-  const sprite = buildConeSprite();
+  const sprite = buildConeSprite(effConeScale(world.upgrades));
   const lx = world.lantern.x;
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
@@ -228,23 +232,26 @@ function drawFireflies(ctx, world) {
   ctx.globalCompositeOperation = 'lighter';
   for (const f of world.fireflies) {
     const tw = 0.65 + 0.35 * Math.sin(world.time * 3 + f.twinkle);
+    // Golden fireflies glow gold instead of green, and brighter.
+    const glowRgb = f.golden ? '255, 211, 77' : '216, 255, 122';
+    const core = f.golden ? GOLDEN.colorCore : COLORS.fireflyCore;
     // Trail: the last few positions fading out behind the dot.
     for (let i = 0; i < f.trail.length; i++) {
       const p = f.trail[i];
       const a = (i / f.trail.length) * 0.22 * tw;
-      ctx.fillStyle = `rgba(216, 255, 122, ${a})`;
+      ctx.fillStyle = `rgba(${glowRgb}, ${a})`;
       ctx.beginPath();
       ctx.arc(p.x, p.y, f.size * 0.7, 0, Math.PI * 2);
       ctx.fill();
     }
     const glow = ctx.createRadialGradient(f.x, f.y, 0, f.x, f.y, f.size * 3.2);
-    glow.addColorStop(0, `rgba(216, 255, 122, ${0.75 * tw})`);
-    glow.addColorStop(1, 'rgba(216, 255, 122, 0)');
+    glow.addColorStop(0, `rgba(${glowRgb}, ${0.75 * tw})`);
+    glow.addColorStop(1, `rgba(${glowRgb}, 0)`);
     ctx.fillStyle = glow;
     ctx.beginPath();
     ctx.arc(f.x, f.y, f.size * 3.2, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = COLORS.fireflyCore;
+    ctx.fillStyle = core;
     ctx.beginPath();
     ctx.arc(f.x, f.y, f.size * 0.62, 0, Math.PI * 2);
     ctx.fill();
@@ -254,27 +261,62 @@ function drawFireflies(ctx, world) {
 
 function drawBats(ctx, world) {
   for (const bat of world.bats) {
+    if (bat.type === 'boss') {
+      drawBoss(ctx, world, bat);
+      continue;
+    }
     const flap = Math.sin(bat.flap) * 0.9;
+    const s = bat.scale;
     ctx.save();
     ctx.translate(bat.x, bat.y);
-    ctx.scale(bat.dir, 1);
+    ctx.scale(bat.dir * s, s);
     ctx.fillStyle = COLORS.bat;
-    // Wings: two broad arcs that beat with the flap.
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.quadraticCurveTo(-16, -14 - flap * 16, -34, -6 - flap * 22);
-    ctx.quadraticCurveTo(-20, 2, -8, 4);
-    ctx.closePath();
-    ctx.fill();
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.quadraticCurveTo(16, -14 - flap * 16, 34, -6 - flap * 22);
-    ctx.quadraticCurveTo(20, 2, 8, 4);
-    ctx.closePath();
-    ctx.fill();
+    if (bat.type === 'swift') {
+      // Swift: long narrow pointed wings, built for a straight dive.
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.quadraticCurveTo(-20, -10 - flap * 14, -46, -2 - flap * 18);
+      ctx.quadraticCurveTo(-24, 2, -8, 3);
+      ctx.closePath();
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.quadraticCurveTo(20, -10 - flap * 14, 46, -2 - flap * 18);
+      ctx.quadraticCurveTo(24, 2, 8, 3);
+      ctx.closePath();
+      ctx.fill();
+    } else if (bat.type === 'tank') {
+      // Tank: broad round wings and a heavy body, slow but hard to scare.
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.quadraticCurveTo(-20, -20 - flap * 14, -42, -8 - flap * 20);
+      ctx.quadraticCurveTo(-30, 6, -10, 6);
+      ctx.closePath();
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.quadraticCurveTo(20, -20 - flap * 14, 42, -8 - flap * 20);
+      ctx.quadraticCurveTo(30, 6, 10, 6);
+      ctx.closePath();
+      ctx.fill();
+    } else {
+      // Hunter: the original broad arcs.
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.quadraticCurveTo(-16, -14 - flap * 16, -34, -6 - flap * 22);
+      ctx.quadraticCurveTo(-20, 2, -8, 4);
+      ctx.closePath();
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.quadraticCurveTo(16, -14 - flap * 16, 34, -6 - flap * 22);
+      ctx.quadraticCurveTo(20, 2, 8, 4);
+      ctx.closePath();
+      ctx.fill();
+    }
     // Body and ears.
     ctx.beginPath();
-    ctx.ellipse(0, 0, 11, 8, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, 0, bat.type === 'tank' ? 14 : 11, bat.type === 'tank' ? 10 : 8, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.beginPath();
     ctx.moveTo(-7, -6);
@@ -296,6 +338,95 @@ function drawBats(ctx, world) {
     ctx.fill();
     ctx.restore();
   }
+}
+
+// Raja Kelelawar: drawn big in the same silhouette language — broad
+// veined wings, horned ears, fangs, a forked tail, red eyes — with his
+// remaining pulse-hits as pips above him, so the fight reads at a glance.
+function drawBoss(ctx, world, bat) {
+  const flap = Math.sin(bat.flap) * 0.9;
+  const blink = bat.stagger > 0 && Math.floor(world.time * 12) % 2 === 0;
+  ctx.save();
+  ctx.translate(bat.x, bat.y);
+  if (blink) ctx.globalAlpha = 0.55;
+  ctx.scale(bat.dir, 1);
+  ctx.fillStyle = COLORS.bat;
+  // Wings: huge, with a scalloped trailing edge between the finger tips.
+  for (const side of [-1, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.quadraticCurveTo(side * 44, -38 - flap * 34, side * 92, -14 - flap * 46);
+    ctx.quadraticCurveTo(side * 76, -2, side * 58, 2);
+    ctx.quadraticCurveTo(side * 48, -4, side * 36, 4);
+    ctx.quadraticCurveTo(side * 24, -2, side * 12, 6);
+    ctx.closePath();
+    ctx.fill();
+  }
+  // Forked tail.
+  ctx.beginPath();
+  ctx.moveTo(-8, 14);
+  ctx.lineTo(-16, 34);
+  ctx.lineTo(-6, 24);
+  ctx.lineTo(0, 36);
+  ctx.lineTo(6, 24);
+  ctx.lineTo(16, 34);
+  ctx.lineTo(8, 14);
+  ctx.closePath();
+  ctx.fill();
+  // Body.
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 28, 20, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Horned ears.
+  ctx.beginPath();
+  ctx.moveTo(-18, -14);
+  ctx.lineTo(-26, -36);
+  ctx.lineTo(-8, -20);
+  ctx.closePath();
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(18, -14);
+  ctx.lineTo(26, -36);
+  ctx.lineTo(8, -20);
+  ctx.closePath();
+  ctx.fill();
+  // Fangs.
+  ctx.fillStyle = '#f5ecd7';
+  ctx.beginPath();
+  ctx.moveTo(-8, 12);
+  ctx.lineTo(-4, 22);
+  ctx.lineTo(0, 12);
+  ctx.closePath();
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(0, 12);
+  ctx.lineTo(4, 22);
+  ctx.lineTo(8, 12);
+  ctx.closePath();
+  ctx.fill();
+  // Red eyes, bigger and angrier than a regular bat's.
+  ctx.fillStyle = COLORS.batEye;
+  ctx.beginPath();
+  ctx.arc(10, -4, 4.5, 0, Math.PI * 2);
+  ctx.arc(22, -4, 4.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  // Hit pips above the boss: filled = hits still needed.
+  const hpLeft = bat.pulseHp - bat.pulseHits;
+  ctx.save();
+  ctx.translate(bat.x, bat.y - 62);
+  for (let i = 0; i < bat.pulseHp; i++) {
+    const cx = (i - (bat.pulseHp - 1) / 2) * 22;
+    ctx.fillStyle = i < hpLeft ? COLORS.batEye : 'rgba(245, 236, 215, 0.25)';
+    ctx.beginPath();
+    ctx.moveTo(cx, -7);
+    ctx.lineTo(cx + 6, 0);
+    ctx.lineTo(cx, 7);
+    ctx.lineTo(cx - 6, 0);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
 }
 
 function drawLantern(ctx, world) {
@@ -400,16 +531,17 @@ function drawHud(ctx, world) {
   ctx.fillRect(W / 2 - 90, 52, 180, 4);
   ctx.fillStyle = COLORS.amber;
   ctx.fillRect(W / 2 - 90, 52, 180 * prog, 4);
-  // Lives (little lanterns) and pulse charges, top right.
+  // Lives (little lanterns) and pulse charges, top right. Both grow
+  // with upgrades: lives to 5, pulse charges to 5.
   ctx.textAlign = 'right';
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < effMaxLives(world.upgrades); i++) {
     drawMiniLantern(ctx, W - 32 - i * 32, 32, i < world.lantern.lives);
   }
   ctx.fillStyle = COLORS.hud;
   ctx.font = `700 18px ${HUD_FONT}`;
   ctx.fillText(`Diselamatkan ${world.saved}`, W - 24, 56);
   // Pulse charges as glowing dots under the lives.
-  for (let i = 0; i < PULSE.max; i++) {
+  for (let i = 0; i < effPulseMax(world.upgrades); i++) {
     const cx = W - 32 - i * 28;
     const cy = 96;
     ctx.beginPath();
@@ -440,6 +572,37 @@ function drawHud(ctx, world) {
   ctx.textBaseline = 'top';
   ctx.font = `400 13px ${HUD_FONT}`;
   ctx.fillText(world.audio.muted ? 'Suara: mati (M)' : 'Suara: hidup (M)', W - 24, H - 28);
+  // Picked upgrades, bottom left: one quiet line, so a build reads in
+  // the HUD without shouting. Hidden until the first pick.
+  const picked = UPGRADE_DEFS.filter((d) => world.upgrades[d.id] > 0);
+  if (picked.length > 0) {
+    ctx.textAlign = 'left';
+    ctx.fillStyle = COLORS.hudDim;
+    ctx.font = `400 14px ${HUD_FONT}`;
+    ctx.fillText(
+      picked.map((d) => `${d.name} Lv${world.upgrades[d.id]}`).join('  •  '),
+      24, H - 28,
+    );
+  }
+  ctx.restore();
+  drawBossBanner(ctx, world);
+}
+
+// The boss intro banner, drawn over play (not in the overlay, so the
+// fight stays visible behind it): big red serif, fading out over its life.
+function drawBossBanner(ctx, world) {
+  if (!world.bossBanner || world.bossBanner <= 0) return;
+  const alpha = Math.min(1, world.bossBanner / 0.5);
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#ff8a7a';
+  ctx.font = `700 64px ${TITLE_FONT}`;
+  ctx.fillText('Raja Kelelawar datang', W / 2, 168);
+  ctx.fillStyle = COLORS.hud;
+  ctx.font = `italic 400 22px ${TITLE_FONT}`;
+  ctx.fillText('Tiga kilau untuk mengusirnya. Jangan biarkan dia menyentuh lentera.', W / 2, 216);
   ctx.restore();
 }
 
@@ -481,6 +644,7 @@ function drawMiniLantern(ctx, x, y, lit) {
 function drawOverlay(ctx, world) {
   if (world.state === 'title') drawTitle(ctx, world);
   else if (world.state === 'pause') drawPause(ctx, world);
+  else if (world.state === 'upgrade') drawUpgrade(ctx, world);
   else if (world.state === 'nightclear') drawNightClear(ctx, world);
   else if (world.state === 'dawn') drawDawn(ctx, world);
   else if (world.state === 'gameover') drawGameOver(ctx, world);
@@ -510,6 +674,9 @@ function drawTitle(ctx, world) {
   ctx.font = `400 20px ${HUD_FONT}`;
   ctx.fillText('Lima malam. Satu lentera terakhir. Bawa kunang-kunang pulang,', W / 2, 388);
   ctx.fillText('jangan biarkan kelelawar memadamkan cahayamu.', W / 2, 416);
+  ctx.fillStyle = COLORS.hudDim;
+  ctx.font = `italic 400 18px ${TITLE_FONT}`;
+  ctx.fillText('Malam kelima dijaga Raja Kelelawar. Tiga kilau untuk mengusirnya.', W / 2, 446);
   // Controls as keycap rows, centred.
   drawControlRow(ctx, 472, `400 17px ${HUD_FONT}`, [
     { cap: '←' }, { cap: '→' }, { text: 'gerakkan lentera' },
@@ -591,8 +758,93 @@ function drawPause(ctx, world) {
   ctx.restore();
 }
 
-// Night-clear banner: rises 16px and fades in over 0.35 s (ease-out),
-// fades out over the last 0.4 s. One entrance, one easing curve.
+// Upgrade choice: three solid dark cards on a 4px grid, one amber accent,
+// keycaps 1/2/3. The picked card highlights while the confirmation runs.
+// Card rectangles are stored on the world for click hit-testing.
+function drawUpgrade(ctx, world) {
+  scrim(ctx, 0.55);
+  const choices = world.upgradeChoices;
+  const pickedIdx = world.upgradeConfirm > 0
+    ? choices.findIndex((d) => d === world.lastUpgrade)
+    : -1;
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = COLORS.amberSoft;
+  ctx.font = `700 56px ${TITLE_FONT}`;
+  ctx.fillText(`Malam ${world.night} terlewati`, W / 2, 128);
+  ctx.fillStyle = COLORS.hud;
+  ctx.font = `400 22px ${HUD_FONT}`;
+  ctx.fillText('Pilih satu hadiah sebelum malam berikutnya.', W / 2, 184);
+  const cardW = 300;
+  const cardH = 240;
+  const gap = 24;
+  const totalW = cardW * 3 + gap * 2;
+  const x0 = Math.round((W - totalW) / 2);
+  const y0 = 236;
+  world.upgradeCardRects = [];
+  choices.forEach((def, i) => {
+    const x = x0 + i * (cardW + gap);
+    const y = y0;
+    world.upgradeCardRects.push({ x, y, w: cardW, h: cardH });
+    const picked = i === pickedIdx;
+    const dimmed = pickedIdx >= 0 && !picked;
+    ctx.save();
+    if (dimmed) ctx.globalAlpha = 0.45;
+    // Solid dark panel, thin amber border (thicker when picked).
+    ctx.fillStyle = '#0a0e22';
+    roundRect(ctx, x, y, cardW, cardH, 8);
+    ctx.fill();
+    ctx.strokeStyle = picked ? COLORS.amber : 'rgba(255, 179, 71, 0.45)';
+    ctx.lineWidth = picked ? 3 : 1;
+    roundRect(ctx, x, y, cardW, cardH, 8);
+    ctx.stroke();
+    // Keycap with the pick key.
+    drawKeycap(ctx, x + 24, y + 32, String(i + 1), 'left');
+    // Name, level step, description.
+    ctx.textAlign = 'left';
+    ctx.fillStyle = COLORS.hud;
+    ctx.font = `700 24px ${HUD_FONT}`;
+    ctx.fillText(def.name, x + 24, y + 76);
+    ctx.fillStyle = COLORS.amber;
+    ctx.font = `700 17px ${HUD_FONT}`;
+    const lvl = world.upgrades[def.id];
+    ctx.fillText(`Lv ${lvl}  →  Lv ${lvl + 1}   (maks ${def.max})`, x + 24, y + 108);
+    ctx.fillStyle = COLORS.hudDim;
+    ctx.font = `400 16px ${HUD_FONT}`;
+    wrapText(ctx, def.desc, x + 24, y + 140, cardW - 48, 22);
+    ctx.restore();
+  });
+  ctx.textAlign = 'center';
+  if (pickedIdx >= 0) {
+    ctx.fillStyle = COLORS.amber;
+    ctx.font = `700 24px ${HUD_FONT}`;
+    ctx.fillText(`Terpilih: ${world.lastUpgrade.name}`, W / 2, 532);
+  } else {
+    ctx.fillStyle = COLORS.hudDim;
+    ctx.font = `400 18px ${HUD_FONT}`;
+    ctx.fillText('Tekan 1, 2, 3 atau klik kartunya', W / 2, 532);
+  }
+  ctx.restore();
+}
+
+// Greedy word wrap for one short description, left-aligned.
+function wrapText(ctx, text, x, y, maxW, lineH) {
+  const words = text.split(' ');
+  let line = '';
+  let cy = y;
+  for (const word of words) {
+    const test = line ? `${line} ${word}` : word;
+    if (ctx.measureText(test).width > maxW && line) {
+      ctx.fillText(line, x, cy);
+      line = word;
+      cy += lineH;
+    } else {
+      line = test;
+    }
+  }
+  if (line) ctx.fillText(line, x, cy);
+}
 function drawNightClear(ctx, world) {
   scrim(ctx, 0.35);
   const total = 2.8;
@@ -611,9 +863,20 @@ function drawNightClear(ctx, world) {
   ctx.fillStyle = COLORS.hud;
   ctx.font = `400 24px ${HUD_FONT}`;
   ctx.fillText(`Skor ${world.score}  •  ${world.saved} kunang diselamatkan`, W / 2, H / 2 + 16 + rise);
+  // The upgrade picked after this night, named on the banner.
+  let fogY = H / 2 + 56 + rise;
+  if (world.lastUpgrade) {
+    ctx.fillStyle = COLORS.amber;
+    ctx.font = `700 20px ${HUD_FONT}`;
+    ctx.fillText(
+      `Dipilih: ${world.lastUpgrade.name} (Lv${world.upgrades[world.lastUpgrade.id]})`,
+      W / 2, H / 2 + 56 + rise,
+    );
+    fogY = H / 2 + 92 + rise;
+  }
   ctx.fillStyle = COLORS.hudDim;
   ctx.font = `400 19px ${HUD_FONT}`;
-  ctx.fillText(world.night < 5 ? 'Kabut menebal. Kelelawar makin berani.' : '', W / 2, H / 2 + 56 + rise);
+  ctx.fillText(world.night < 5 ? 'Kabut menebal. Kelelawar makin berani.' : '', W / 2, fogY);
   ctx.restore();
 }
 

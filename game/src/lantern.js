@@ -4,12 +4,14 @@
 // hit leaves it briefly invulnerable so one bat cannot take two lives.
 
 import { W, LANTERN, PULSE, LIVES, FEEL } from './config.js';
-import { scareBats } from './bats.js';
+import { pulseHitBats } from './bats.js';
+import { effPulseMax, effPulseRadius, effRechargeSec } from './upgrades.js';
 
 export class Lantern {
   constructor() {
     this.x = W / 2;
     this.lives = LIVES;
+    this.maxLives = LIVES;
     this.pulseCharges = PULSE.max;
     this.pulseTimer = 0; // seconds since the last recharge tick
     this.flash = 0; // seconds of pulse brightness remaining
@@ -20,6 +22,7 @@ export class Lantern {
   reset() {
     this.x = W / 2;
     this.lives = LIVES;
+    this.maxLives = LIVES;
     this.pulseCharges = PULSE.max;
     this.pulseTimer = 0;
     this.flash = 0;
@@ -41,10 +44,11 @@ export class Lantern {
       this.x += Math.abs(diff) < step ? diff : Math.sign(diff) * step;
     }
     this.x = Math.max(46, Math.min(W - 46, this.x));
-    // Pulse charges trickle back, one every PULSE.rechargeSec seconds.
-    if (this.pulseCharges < PULSE.max) {
+    // Pulse charges trickle back, one every recharge interval; upgrades
+    // shorten the interval and raise the cap.
+    if (this.pulseCharges < effPulseMax(world.upgrades)) {
       this.pulseTimer += dt;
-      if (this.pulseTimer >= PULSE.rechargeSec) {
+      if (this.pulseTimer >= effRechargeSec(world.upgrades)) {
         this.pulseTimer = 0;
         this.pulseCharges += 1;
       }
@@ -63,14 +67,15 @@ export class Lantern {
     return 1 + 0.15 * (1 - backOut);
   }
 
-  // Fire a pulse: scare every bat away and brighten the cone. Returns
-  // true when a charge was spent, false when the lantern is empty.
+  // Fire a pulse: bats inside the pulse radius take a hit and the cone
+  // brightens. Returns null when the lantern is empty, otherwise the
+  // pulseHitBats result { fled, bossHit, bossDefeated } so the caller can
+  // play the boss-hit spectacle and score the defeat.
   pulse(world) {
-    if (this.pulseCharges <= 0) return false;
+    if (this.pulseCharges <= 0) return null;
     this.pulseCharges -= 1;
     this.pulseTimer = 0;
     this.flash = PULSE.flashSec;
-    scareBats(world);
-    return true;
+    return pulseHitBats(world, effPulseRadius(world.upgrades));
   }
 }

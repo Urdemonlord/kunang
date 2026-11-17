@@ -4,41 +4,46 @@
 // lantern is saved; one that slips past the bottom of the valley is lost.
 // Each firefly keeps a short trail so its path glows behind it.
 
-import { W, H, LANTERN, GROUND_Y } from './config.js';
+import { W, H, LANTERN, GROUND_Y, GOLDEN } from './config.js';
+import { effConeScale, effPull } from './upgrades.js';
 
 let nextId = 1;
 
 export class Firefly {
-  constructor(x, y, rng) {
+  constructor(x, y, rng, golden = false) {
     this.id = nextId++;
     this.x = x;
     this.y = y;
-    this.baseFall = 26 + rng() * 22;
+    this.golden = golden;
+    // Golden fireflies fall faster: the risk half of the risk/reward.
+    this.baseFall = (26 + rng() * 22) * (golden ? GOLDEN.fallMult : 1);
     this.wobbleAmp = 14 + rng() * 22;
     this.wobbleSpeed = 0.9 + rng() * 1.4;
     this.phase = rng() * Math.PI * 2;
-    this.size = 3 + rng() * 2.4;
+    this.size = 3 + rng() * 2.4 + (golden ? 1.2 : 0);
     this.twinkle = rng() * Math.PI * 2;
     this.trail = [];
     this.dead = false;
   }
 }
 
-export function spawnFirefly(rng) {
-  return new Firefly(40 + rng() * (W - 80), -12, rng);
+export function spawnFirefly(rng, night = 1) {
+  // Golden fireflies only from night 2 on, about 1 in 12.
+  const golden = night >= 2 && rng() < GOLDEN.chance;
+  return new Firefly(40 + rng() * (W - 80), -12, rng, golden);
 }
 
 // Half-width of the light cone at a given height (narrow at the top,
-// wide at the lantern).
-export function coneHalfWidthAt(y) {
+// wide at the lantern). The cone upgrade scales the whole cone.
+export function coneHalfWidthAt(y, scale = 1) {
   const t = (y - LANTERN.coneTopY) / (LANTERN.y - LANTERN.coneTopY);
   const clamped = Math.max(0, Math.min(1, t));
-  return LANTERN.coneHalfTop + (LANTERN.coneHalfBottom - LANTERN.coneHalfTop) * clamped;
+  return (LANTERN.coneHalfTop + (LANTERN.coneHalfBottom - LANTERN.coneHalfTop) * clamped) * scale;
 }
 
-export function fireflyInCone(f, lanternX) {
+export function fireflyInCone(f, lanternX, scale = 1) {
   if (f.y < LANTERN.coneTopY || f.y > LANTERN.y) return false;
-  return Math.abs(f.x - lanternX) < coneHalfWidthAt(f.y);
+  return Math.abs(f.x - lanternX) < coneHalfWidthAt(f.y, scale);
 }
 
 // Advance every firefly one step. Returns { saved: [], lost: [] } with the
@@ -55,7 +60,7 @@ export function updateFireflies(world, dt) {
     const t = world.time + f.phase;
     let vx = Math.sin(t * f.wobbleSpeed) * f.wobbleAmp;
     let vy = f.baseFall;
-    if (fireflyInCone(f, lantern.x)) {
+    if (fireflyInCone(f, lantern.x, effConeScale(world.upgrades))) {
       // The light pulls the firefly toward the lantern and hurries it home.
       // A velocity bias toward the cone centre, proportional to the offset
       // (LANTERN.pull / 60 per second), frame-rate independent: the old
@@ -63,7 +68,7 @@ export function updateFireflies(world, dt) {
       // against a wobble of up to 36 px/s and a firefly dropped above the
       // lantern could drift past it. With the real pull, the wobble's
       // steady-state offset stays inside the 34 px save radius.
-      vx += (lantern.x - f.x) * (LANTERN.pull / 60);
+      vx += (lantern.x - f.x) * (effPull(world.upgrades) / 60);
       vy += 26;
     }
     f.x += vx * dt;

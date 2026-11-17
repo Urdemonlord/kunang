@@ -40,15 +40,43 @@ export const LANTERN = {
 export const PULSE = {
   max: 3,
   rechargeSec: 12,
-  radius: 540,
+  // The pulse scares bats away only inside this radius of the lantern, so
+  // positioning matters a little: 720 covers the whole lower valley and
+  // most of the sky from the lantern, only the far top corners escape.
+  // The "Kilau Luas" upgrade widens it; level 2 covers the whole screen.
+  radius: 720,
   flashSec: 1.4,
 };
 
 export const LIVES = 3;
+export const MAX_LIVES = 5;
+
+// Raja Kelelawar, the night-5 boss: 3 pulse hits to drive off, a big
+// score bonus for defeating him, and he calls in regular bats while alive.
+export const BOSS = {
+  hp: 3,
+  scoreBonus: 500,
+  spawnAtSec: 2.0, // seconds into night 5 before he swoops in
+  minionEverySec: 4.0,
+  diveEverySec: 3.5,
+  scale: 2.6,
+  speed: 120,
+};
+
+// Kunang Emas: a rare golden firefly, faster and worth 5x, and the one
+// bats prefer to hunt. Only from night 2 on.
+export const GOLDEN = {
+  chance: 1 / 12,
+  scoreMult: 5,
+  fallMult: 1.5,
+  color: '#ffd34d',
+  colorCore: '#fff3c4',
+};
 
 // Game-feel tuning (game-feel skill tiers). Small tier (save): particles
 // only. Medium tier (night clear): particles + flash. Large tier (lantern
 // hit): trauma 0.7, 0.08 s hit-stop, 20-40 particles, hit flash.
+// Spectacle tier (boss): trauma 0.9, 0.12 s hit-stop, big bursts.
 export const FEEL = {
   traumaHit: 0.7,
   hitStopSec: 0.08,
@@ -57,7 +85,12 @@ export const FEEL = {
   maxOffsetX: 12,
   maxOffsetY: 8,
   particlesPerSave: 8,
+  particlesGolden: 24,
+  particlesBossHit: 30,
+  particlesBossDefeat: 60,
   particleCap: 120,
+  traumaBossHit: 0.9,
+  hitStopBossSec: 0.12,
   popSec: 0.18, // lantern squash-and-stretch pop after a save
 };
 
